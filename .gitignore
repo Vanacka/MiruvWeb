@@ -1,17 +1,9 @@
-# Python
-__pycache__/
-*.py[cod]
-.pytest_cache/
-*.egg-info/
+# Python virtual environment
 .venv/
 venv/
 
 # Environment
 .env
-
-# Backend runtime data
-backend/app.db
-backend/uploads/
 
 # IDE
 .idea/
