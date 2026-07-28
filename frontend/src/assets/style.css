@@ -1,0 +1,229 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --ink: #1b1f23;
+  --paper: #f7f7f5;
+  --panel: #ffffff;
+  --slate: #1f2a37;
+  --slate-light: #33465c;
+  --border: #e2e0da;
+  --amber: #d98e04;
+  --amber-dark: #b3720a;
+  --green: #2f9e44;
+  --yellow: #f2b705;
+  --red: #d64545;
+  --muted: #6b7280;
+
+  --font-ui: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+#app { min-height: 100vh; }
+
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 220px;
+  background: var(--slate);
+  color: #fff;
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar .brand {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin-bottom: 20px;
+}
+
+.sidebar a {
+  color: #cbd5e1;
+  text-decoration: none;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.sidebar a.router-link-active {
+  background: var(--slate-light);
+  color: #fff;
+}
+
+.sidebar .user-box {
+  margin-top: auto;
+  font-size: 12px;
+  color: #94a3b8;
+  border-top: 1px solid var(--slate-light);
+  padding-top: 12px;
+}
+
+.sidebar button.logout {
+  margin-top: 8px;
+  background: none;
+  border: 1px solid var(--slate-light);
+  color: #cbd5e1;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.content {
+  flex: 1;
+  padding: 32px 40px;
+  max-width: 1100px;
+}
+
+h1 {
+  font-size: 22px;
+  margin: 0 0 4px;
+}
+
+h1 .eyebrow {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+td.num, th.num { font-family: var(--font-mono); }
+
+.btn {
+  background: var(--amber);
+  color: #fff;
+  border: none;
+  padding: 9px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+.btn:hover { background: var(--amber-dark); }
+.btn.secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--ink);
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.badge.paid { background: #e3f6e5; color: var(--green); }
+.badge.unpaid { background: #fdeeee; color: var(--red); }
+
+input, select, textarea {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 100%;
+}
+
+label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.field { margin-bottom: 14px; }
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+.cal-day {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.cal-day.green { background: #e3f6e5; color: var(--green); }
+.cal-day.yellow { background: #fff6db; color: #a1780a; }
+.cal-day.red { background: #fdeeee; color: var(--red); }
+.cal-day:hover { border-color: currentColor; }
+
+.error { color: var(--red); font-size: 13px; margin-top: 8px; }
+
+.login-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--slate);
+}
+
+.login-card {
+  background: var(--panel);
+  padding: 32px;
+  border-radius: 12px;
+  width: 320px;
+}
