@@ -1,11 +1,12 @@
 from datetime import date as date_type
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from database import get_db
-from auth import get_current_user
-from models import User, DailyChecklist, PerformanceEntry, VacationDay, VacationStatus
+from auth import get_current_user, require_admin
+from models import User, UserRole, DailyChecklist, PerformanceEntry, VacationDay, VacationStatus, Notification
 from schemas import DailyChecklistOut, DailyChecklistUpdate
 
 router = APIRouter(prefix="/checklist", tags=["checklist"])
@@ -75,3 +76,68 @@ def update_today(
         _form_filled(db, current_user.id, today),
         _is_on_vacation(db, current_user.id, today),
     )
+
+
+def run_daily_incomplete_check(db: Session, day: date_type) -> int:
+    """Pro daný den zkontroluje všechny aktivní uživatele (kurýry i admina, pokud
+    ten den jel jako kurýr) a adminům pošle upozornění na každého, kdo nemá
+    hotový celý checklist a zároveň nemá ten den schválenou dovolenou.
+    Idempotentní přes DailyChecklist.notified_incomplete, aby stejný den
+    neposílalo notifikace opakovaně (např. po restartu serveru).
+    """
+    admins = db.query(User).filter(User.role == UserRole.admin).all()
+    if not admins:
+        return 0
+
+    notified = 0
+    for u in db.query(User).filter(User.is_active == True).all():  # noqa: E712
+        if _is_on_vacation(db, u.id, day):
+            continue
+
+        item = db.query(DailyChecklist).filter(
+            DailyChecklist.user_id == u.id, DailyChecklist.date == day,
+        ).first()
+        if item and item.notified_incomplete:
+            continue
+
+        car_checked = item.car_checked if item else False
+        refueled = item.refueled if item else False
+        form_filled = _form_filled(db, u.id, day)
+        if car_checked and refueled and form_filled:
+            continue
+
+        missing = []
+        if not car_checked:
+            missing.append("kontrola auta")
+        if not refueled:
+            missing.append("natankování")
+        if not form_filled:
+            missing.append("formulář trasy")
+
+        for admin in admins:
+            db.add(Notification(
+                recipient_id=admin.id,
+                message=f"{u.full_name} nemá za {day.isoformat()} hotovo: {', '.join(missing)}.",
+            ))
+
+        if not item:
+            item = DailyChecklist(user_id=u.id, date=day)
+            db.add(item)
+        item.notified_incomplete = True
+        notified += 1
+
+    db.commit()
+    return notified
+
+
+@router.post("/run-daily-check")
+def trigger_daily_check(
+    target_date: Optional[date_type] = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    """Ruční spuštění kontroly neúplných checklistů (jinak běží automaticky
+    plánovačem na pozadí). Užitečné pro testování bez čekání na večer."""
+    day = target_date or date_type.today()
+    notified = run_daily_incomplete_check(db, day)
+    return {"date": day, "notified": notified}

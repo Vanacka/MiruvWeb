@@ -1,5 +1,8 @@
 import os
+from datetime import date as date_type
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -13,6 +16,7 @@ from routers import vacation as vacation_router
 from routers import performance as performance_router
 from routers import notifications as notifications_router
 from routers import checklist as checklist_router
+from routers.checklist import run_daily_incomplete_check
 
 Base.metadata.create_all(bind=engine)
 
@@ -59,6 +63,36 @@ def create_default_admin():
             print(f"[INFO] Vytvořen výchozí admin '{username}' - ZMĚŇ HESLO PO PRVNÍM PŘIHLÁŠENÍ.")
     finally:
         db.close()
+
+
+scheduler = BackgroundScheduler(timezone=os.getenv("SCHEDULER_TZ", "Europe/Prague"))
+
+
+def _daily_checklist_job():
+    db = SessionLocal()
+    try:
+        run_daily_incomplete_check(db, date_type.today())
+    finally:
+        db.close()
+
+
+@app.on_event("startup")
+def start_scheduler():
+    """Jednou denně (default 22:00) zkontroluje, kdo nemá hotový checklist,
+    a pošle o tom notifikaci adminům. Čas jde přepsat přes CHECKLIST_CHECK_TIME (HH:MM)."""
+    hour, minute = (os.getenv("CHECKLIST_CHECK_TIME", "22:00")).split(":")
+    scheduler.add_job(
+        _daily_checklist_job,
+        CronTrigger(hour=int(hour), minute=int(minute)),
+        id="daily_checklist_check",
+        replace_existing=True,
+    )
+    scheduler.start()
+
+
+@app.on_event("shutdown")
+def stop_scheduler():
+    scheduler.shutdown(wait=False)
 
 
 @app.get("/")

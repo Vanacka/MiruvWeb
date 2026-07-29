@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useAuth } from '../stores/auth'
 import NavIcon from './NavIcon.vue'
+import NotificationsBell from './NotificationsBell.vue'
 
 const { user, logout } = useAuth()
 
@@ -16,6 +17,7 @@ const navItems = [
   <header class="topbar">
     <div class="brand">MiruvWeb</div>
     <div class="user-chip" v-if="user">
+      <NotificationsBell v-if="user.role === 'admin'" />
       <span>{{ user.full_name }}</span>
       <button class="logout" @click="logout">Odhlásit</button>
     </div>
@@ -31,6 +33,8 @@ const navItems = [
       <button class="logout" @click="logout">Odhlásit se</button>
     </div>
   </aside>
+
+  <NotificationsBell v-if="user?.role === 'admin'" class="desktop-bell" />
 
   <nav class="bottom-nav">
     <router-link v-for="item in navItems" :key="item.to" :to="item.to" class="bottom-nav-item">

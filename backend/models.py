@@ -123,6 +123,8 @@ class DailyChecklist(Base):
     date = Column(Date, nullable=False)
     car_checked = Column(Boolean, default=False)
     refueled = Column(Boolean, default=False)
+    # Zabraňuje opakovanému upozornění adminů na stejný neúplný den.
+    notified_incomplete = Column(Boolean, default=False)
 
     user = relationship("User")
 
