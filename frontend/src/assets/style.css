@@ -138,6 +138,10 @@ body {
     padding: 24px 16px;
     flex-direction: column;
     gap: 4px;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
   }
 
   .sidebar .brand {
