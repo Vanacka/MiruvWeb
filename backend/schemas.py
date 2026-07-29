@@ -139,6 +139,7 @@ class DailyChecklistOut(BaseModel):
     car_checked: bool
     refueled: bool
     form_filled: bool  # dopočítáno z existence PerformanceEntry za daný den
+    on_vacation: bool  # dopočítáno ze schválené dovolené na daný den
 
 
 # ---------- Notifications ----------

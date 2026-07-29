@@ -8,6 +8,7 @@ interface Checklist {
   car_checked: boolean
   refueled: boolean
   form_filled: boolean
+  on_vacation: boolean
 }
 
 const { user } = useAuth()
@@ -51,7 +52,12 @@ onMounted(load)
     <h1><span class="eyebrow">Dnešní směna</span>Ahoj, {{ user?.full_name }}</h1>
     <p class="today-date">{{ todayLabel }}</p>
 
-    <div class="card checklist-card" v-if="checklist">
+    <div class="card vacation-card" v-if="checklist?.on_vacation">
+      <h3 style="margin-top: 0">Dnes máš dovolenou</h3>
+      <p style="margin: 0; color: var(--muted)">Žádné úkoly na dnešek nemáš, užij si volno.</p>
+    </div>
+
+    <div class="card checklist-card" v-else-if="checklist">
       <div class="checklist-header">
         <h3>Úkoly na dnešní den</h3>
         <span class="checklist-progress">{{ doneCount }}/3 hotovo</span>

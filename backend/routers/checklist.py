@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from auth import get_current_user
-from models import User, DailyChecklist, PerformanceEntry
+from models import User, DailyChecklist, PerformanceEntry, VacationDay, VacationStatus
 from schemas import DailyChecklistOut, DailyChecklistUpdate
 
 router = APIRouter(prefix="/checklist", tags=["checklist"])
@@ -29,10 +29,17 @@ def _form_filled(db: Session, user_id: int, today: date_type) -> bool:
     ).first() is not None
 
 
-def _to_out(item: DailyChecklist, form_filled: bool) -> DailyChecklistOut:
+def _is_on_vacation(db: Session, user_id: int, day: date_type) -> bool:
+    return db.query(VacationDay).filter(
+        VacationDay.user_id == user_id, VacationDay.date == day,
+        VacationDay.status == VacationStatus.approved,
+    ).first() is not None
+
+
+def _to_out(item: DailyChecklist, form_filled: bool, on_vacation: bool) -> DailyChecklistOut:
     return DailyChecklistOut(
         date=item.date, car_checked=item.car_checked, refueled=item.refueled,
-        form_filled=form_filled,
+        form_filled=form_filled, on_vacation=on_vacation,
     )
 
 
@@ -40,7 +47,11 @@ def _to_out(item: DailyChecklist, form_filled: bool) -> DailyChecklistOut:
 def get_today(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     today = date_type.today()
     item = _get_or_create_today(db, current_user.id, today)
-    return _to_out(item, _form_filled(db, current_user.id, today))
+    return _to_out(
+        item,
+        _form_filled(db, current_user.id, today),
+        _is_on_vacation(db, current_user.id, today),
+    )
 
 
 @router.patch("/today", response_model=DailyChecklistOut)
@@ -59,4 +70,8 @@ def update_today(
         item.refueled = payload.refueled
     db.commit()
     db.refresh(item)
-    return _to_out(item, _form_filled(db, current_user.id, today))
+    return _to_out(
+        item,
+        _form_filled(db, current_user.id, today),
+        _is_on_vacation(db, current_user.id, today),
+    )
