@@ -12,6 +12,7 @@ from routers import fuel as fuel_router
 from routers import vacation as vacation_router
 from routers import performance as performance_router
 from routers import notifications as notifications_router
+from routers import checklist as checklist_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -35,6 +36,7 @@ app.include_router(fuel_router.router)
 app.include_router(vacation_router.router)
 app.include_router(performance_router.router)
 app.include_router(notifications_router.router)
+app.include_router(checklist_router.router)
 
 
 @app.on_event("startup")

@@ -127,6 +127,20 @@ class PerformanceAverages(BaseModel):
     entries_count: int
 
 
+# ---------- Denní checklist ----------
+
+class DailyChecklistUpdate(BaseModel):
+    car_checked: Optional[bool] = None
+    refueled: Optional[bool] = None
+
+
+class DailyChecklistOut(BaseModel):
+    date: date
+    car_checked: bool
+    refueled: bool
+    form_filled: bool  # dopočítáno z existence PerformanceEntry za daný den
+
+
 # ---------- Notifications ----------
 
 class NotificationOut(BaseModel):

@@ -3,7 +3,7 @@ from datetime import datetime, date
 
 from sqlalchemy import (
     Column, Integer, String, Float, Boolean, Date, DateTime,
-    ForeignKey, Enum, Text, JSON
+    ForeignKey, Enum, Text, JSON, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 
@@ -108,6 +108,23 @@ class PerformanceEntry(Base):
 
     user = relationship("User", back_populates="performance_entries", foreign_keys=[user_id])
     route = relationship("Route", back_populates="performance_entries")
+
+
+class DailyChecklist(Base):
+    """Ruční položky denního checklistu kurýra (auto, natankování).
+    Položka 'vyplnit formulář' se neukládá zde - dopočítává se z existence
+    PerformanceEntry pro daný den, aby ji kurýr nemohl odškrtnout ručně.
+    """
+    __tablename__ = "daily_checklists"
+    __table_args__ = (UniqueConstraint("user_id", "date", name="uq_daily_checklist_user_date"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    date = Column(Date, nullable=False)
+    car_checked = Column(Boolean, default=False)
+    refueled = Column(Boolean, default=False)
+
+    user = relationship("User")
 
 
 class Notification(Base):

@@ -29,54 +29,53 @@ body {
 
 #app { min-height: 100vh; }
 
+/* Mobile-first layout: sticky top bar + fixed bottom tab bar.
+   The classic left sidebar only shows up from --desktop-bp upward. */
+
 .layout {
   display: flex;
+  flex-direction: column;
   min-height: 100vh;
 }
 
-.sidebar {
-  width: 220px;
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   background: var(--slate);
   color: #fff;
-  padding: 24px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  padding: 12px 16px;
 }
 
-.sidebar .brand {
+.topbar .brand {
   font-family: var(--font-mono);
   font-size: 13px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--amber);
-  margin-bottom: 20px;
 }
 
-.sidebar a {
-  color: #cbd5e1;
-  text-decoration: none;
-  padding: 10px 12px;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.sidebar a.router-link-active {
-  background: var(--slate-light);
-  color: #fff;
-}
-
-.sidebar .user-box {
-  margin-top: auto;
+.topbar .user-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 12px;
-  color: #94a3b8;
-  border-top: 1px solid var(--slate-light);
-  padding-top: 12px;
+  color: #cbd5e1;
+  min-width: 0;
 }
 
-.sidebar button.logout {
-  margin-top: 8px;
+.topbar .user-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40vw;
+}
+
+.topbar button.logout {
   background: none;
   border: 1px solid var(--slate-light);
   color: #cbd5e1;
@@ -84,12 +83,109 @@ body {
   border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
+  flex-shrink: 0;
 }
+
+.sidebar { display: none; }
+
+.bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  background: var(--slate);
+  border-top: 1px solid var(--slate-light);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.bottom-nav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 4px 9px;
+  color: #94a3b8;
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.bottom-nav-item svg { width: 22px; height: 22px; }
+
+.bottom-nav-item.router-link-active { color: #fff; }
+.bottom-nav-item.router-link-active svg { color: var(--amber); }
 
 .content {
   flex: 1;
-  padding: 32px 40px;
-  max-width: 1100px;
+  min-width: 0;
+  padding: 16px 16px calc(76px + env(safe-area-inset-bottom));
+}
+
+@media (min-width: 860px) {
+  .layout { flex-direction: row; }
+
+  .topbar, .bottom-nav { display: none; }
+
+  .sidebar {
+    display: flex;
+    width: 220px;
+    flex-shrink: 0;
+    background: var(--slate);
+    color: #fff;
+    padding: 24px 16px;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .sidebar .brand {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--amber);
+    margin-bottom: 20px;
+  }
+
+  .sidebar a {
+    color: #cbd5e1;
+    text-decoration: none;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .sidebar a.router-link-active {
+    background: var(--slate-light);
+    color: #fff;
+  }
+
+  .sidebar .user-box {
+    margin-top: auto;
+    font-size: 12px;
+    color: #94a3b8;
+    border-top: 1px solid var(--slate-light);
+    padding-top: 12px;
+  }
+
+  .sidebar button.logout {
+    margin-top: 8px;
+    background: none;
+    border: 1px solid var(--slate-light);
+    color: #cbd5e1;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .content {
+    padding: 32px 40px;
+    max-width: 1100px;
+  }
 }
 
 h1 {
@@ -113,10 +209,12 @@ h1 .eyebrow {
   border-radius: 10px;
   padding: 20px;
   margin-bottom: 20px;
+  overflow-x: auto;
 }
 
 table {
   width: 100%;
+  min-width: 480px;
   border-collapse: collapse;
   font-size: 14px;
 }
@@ -185,8 +283,14 @@ label {
 
 .form-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 14px;
+}
+
+@media (min-width: 560px) {
+  .form-row {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 .calendar-grid {
@@ -225,5 +329,110 @@ label {
   background: var(--panel);
   padding: 32px;
   border-radius: 12px;
-  width: 320px;
+  width: 100%;
+  max-width: 320px;
+  margin: 0 16px;
+}
+
+/* ---------- Domácí stránka / denní checklist ---------- */
+
+.today-date {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0 0 20px;
+  text-transform: capitalize;
+}
+
+.checklist-card {
+  padding: 4px 0 8px;
+}
+
+.checklist-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 20px 8px;
+}
+
+.checklist-header h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.checklist-progress {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.checklist-item {
+  border-top: 1px solid var(--border);
+}
+.checklist-item:first-child { border-top: none; }
+
+.check-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: none;
+  border: none;
+  padding: 16px 20px;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  text-decoration: none;
+  font-family: inherit;
+}
+
+.check-toggle:disabled { opacity: 0.6; cursor: default; }
+
+.check-box {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 2px solid var(--border);
+  position: relative;
+}
+
+.check-box.checked {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.check-box.checked::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 3px;
+  width: 6px;
+  height: 12px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.check-label {
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.checklist-item.done .check-label { color: var(--muted); text-decoration: line-through; }
+
+.check-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
 }
