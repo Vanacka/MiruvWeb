@@ -127,6 +127,24 @@ class PerformanceEntry(Base):
 
     user = relationship("User", back_populates="performance_entries", foreign_keys=[user_id])
     route = relationship("Route", back_populates="performance_entries")
+    edits = relationship(
+        "PerformanceEntryEdit", back_populates="entry", order_by="PerformanceEntryEdit.edited_at",
+    )
+
+
+class PerformanceEntryEdit(Base):
+    """Log jednotlivých úprav záznamu výkonu - kdo, kdy a co změnil.
+    Vytváření záznamu (create_entry) se sem nezaznamenává, jen následné PATCHe."""
+    __tablename__ = "performance_entry_edits"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entry_id = Column(Integer, ForeignKey("performance_entries.id"), nullable=False)
+    edited_by_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    edited_at = Column(DateTime, default=datetime.utcnow)
+    changes = Column(JSON, default=dict)  # {"pole": {"old": ..., "new": ...}, ...}
+
+    entry = relationship("PerformanceEntry", back_populates="edits")
+    edited_by = relationship("User")
 
 
 class PerformanceFieldType(str, enum.Enum):

@@ -26,6 +26,8 @@ interface Entry {
   extra_fields: Record<string, string | number>
   is_weekend: boolean
   is_holiday: boolean
+  edit_count: number
+  is_late_edit: boolean
 }
 interface Average {
   user_id: number
@@ -36,6 +38,24 @@ interface Average {
   entries_count: number
 }
 interface UserOption { id: number; full_name: string; role: 'admin' | 'courier' }
+interface EditLogEntry {
+  id: number
+  edited_by_id: number
+  edited_by_name: string
+  edited_at: string
+  changes: Record<string, { old: unknown; new: unknown }>
+}
+
+const fieldLabels: Record<string, string> = {
+  route_id: 'Trasa',
+  date: 'Datum',
+  km_driven: 'Kilometry',
+  packages_delivered: 'Počet zásilek',
+  hours_worked: 'Odpracované hodiny',
+  note: 'Poznámka',
+  confirmed: 'Potvrzeno',
+  extra_fields: 'Vlastní pole',
+}
 
 const { user } = useAuth()
 const isAdmin = computed(() => user.value?.role === 'admin')
@@ -61,25 +81,45 @@ watch(filterDay, (val) => {
   if (m) filterMonth.value = m
 })
 
-const form = ref({
-  route_id: null as number | null,
-  date: new Date().toISOString().slice(0, 10),
-  km_driven: 0,
-  packages_delivered: 0,
-  hours_worked: 0,
-  note: '',
-  confirmed: false,
-  extra_fields: {} as Record<string, string>,
-})
+function emptyForm() {
+  return {
+    route_id: null as number | null,
+    date: new Date().toISOString().slice(0, 10),
+    km_driven: 0,
+    packages_delivered: 0,
+    hours_worked: 0,
+    note: '',
+    confirmed: false,
+    extra_fields: {} as Record<string, string>,
+  }
+}
+
+const form = ref(emptyForm())
 const submitting = ref(false)
 const formError = ref('')
+const editingId = ref<number | null>(null)
 
 const newField = ref({ label: '', field_type: 'number' as 'number' | 'text', required: false })
 const fieldSubmitting = ref(false)
 const fieldError = ref('')
 
+const expandedLogId = ref<number | null>(null)
+const editLogs = ref<Record<number, EditLogEntry[]>>({})
+const loadingLog = ref<number | null>(null)
+
 function courierName(userId: number) {
   return allUsers.value.find((u) => u.id === userId)?.full_name || `#${userId}`
+}
+
+function canEdit(e: Entry) {
+  return isAdmin.value || e.user_id === user.value?.id
+}
+
+function formatChangeValue(field: string, value: unknown) {
+  if (field === 'route_id') return routes.value.find((r) => r.id === value)?.name ?? value
+  if (field === 'confirmed') return value ? 'ano' : 'ne'
+  if (field === 'extra_fields') return JSON.stringify(value)
+  return value
 }
 
 async function loadRoutes() {
@@ -127,6 +167,28 @@ function refreshFiltered() {
   loadAverages()
 }
 
+function startEdit(e: Entry) {
+  editingId.value = e.id
+  form.value = {
+    route_id: e.route_id,
+    date: e.date,
+    km_driven: e.km_driven,
+    packages_delivered: e.packages_delivered,
+    hours_worked: e.hours_worked,
+    note: e.note || '',
+    confirmed: e.confirmed,
+    extra_fields: { ...e.extra_fields } as Record<string, string>,
+  }
+  formError.value = ''
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function cancelEdit() {
+  editingId.value = null
+  form.value = emptyForm()
+  formError.value = ''
+}
+
 async function submit() {
   formError.value = ''
   if (!form.value.route_id) {
@@ -135,15 +197,46 @@ async function submit() {
   }
   submitting.value = true
   try {
-    await api.post('/performance', form.value)
-    form.value.note = ''
-    form.value.confirmed = false
-    form.value.extra_fields = {}
+    if (editingId.value) {
+      await api.patch(`/performance/${editingId.value}`, form.value)
+      cancelEdit()
+    } else {
+      await api.post('/performance', form.value)
+      form.value.note = ''
+      form.value.confirmed = false
+      form.value.extra_fields = {}
+    }
     await loadEntries()
   } catch (e) {
-    formError.value = e instanceof Error ? e.message : 'Nepodařilo se uložit'
+    const message = e instanceof Error ? e.message : 'Nepodařilo se uložit'
+    // Pokud už na tuto trasu a den záznam existuje a smím ho upravit, rovnou tam přepneme.
+    const clash = entries.value.find(
+      (en) => en.route_id === form.value.route_id && en.date === form.value.date,
+    )
+    if (!editingId.value && clash && canEdit(clash)) {
+      startEdit(clash)
+      formError.value = `${message} Přepnuto do režimu úpravy stávajícího záznamu.`
+    } else {
+      formError.value = message
+    }
   } finally {
     submitting.value = false
+  }
+}
+
+async function toggleLog(entryId: number) {
+  if (expandedLogId.value === entryId) {
+    expandedLogId.value = null
+    return
+  }
+  expandedLogId.value = entryId
+  if (!editLogs.value[entryId]) {
+    loadingLog.value = entryId
+    try {
+      editLogs.value[entryId] = await api.get<EditLogEntry[]>(`/performance/${entryId}/edits`)
+    } finally {
+      loadingLog.value = null
+    }
   }
 }
 
@@ -192,16 +285,19 @@ onMounted(async () => {
     <h1><span class="eyebrow">Denní výkon</span>Formulář na denní výkon</h1>
 
     <div class="card">
-      <h3 style="margin-top:0">Nový záznam</h3>
+      <h3 style="margin-top:0">{{ editingId ? 'Upravit záznam' : 'Nový záznam' }}</h3>
+      <p v-if="editingId" style="font-size:12px;color:var(--muted);margin-top:-8px">
+        Upravuješ existující záznam. Pokud ho upravíš jiný den, než na který je, uvidí to admin v přehledu.
+      </p>
       <form @submit.prevent="submit">
         <div class="form-row">
           <div class="field">
             <label>Trasa</label>
             <select v-model.number="form.route_id" required>
               <option :value="null" disabled>Vyber trasu</option>
-              <option v-for="r in myRoutes" :key="r.id" :value="r.id">{{ r.name }}</option>
+              <option v-for="r in (editingId ? routes : myRoutes)" :key="r.id" :value="r.id">{{ r.name }}</option>
             </select>
-            <p v-if="!myRoutes.length" style="font-size: 12px; color: var(--muted); margin: 4px 0 0">
+            <p v-if="!editingId && !myRoutes.length" style="font-size: 12px; color: var(--muted); margin: 4px 0 0">
               Zatím nejsou založené žádné trasy.
             </p>
           </div>
@@ -248,7 +344,10 @@ onMounted(async () => {
           Pokud checkbox neodškrtneš, Mirkovi přijde upozornění.
         </p>
         <button class="btn" type="submit" :disabled="submitting">
-          {{ submitting ? 'Ukládám…' : 'Uložit záznam' }}
+          {{ submitting ? 'Ukládám…' : editingId ? 'Uložit úpravu' : 'Uložit záznam' }}
+        </button>
+        <button v-if="editingId" type="button" class="btn secondary" style="margin-left:8px" @click="cancelEdit">
+          Zrušit úpravu
         </button>
         <p v-if="formError" class="error">{{ formError }}</p>
       </form>
@@ -358,25 +457,64 @@ onMounted(async () => {
             <th>Trasa</th><th class="num">Km</th><th class="num">Zásilky</th>
             <th class="num">Hodiny</th>
             <th v-for="f in activeFields" :key="f.id" class="num">{{ f.label }}</th>
-            <th>Potvrzeno</th><th>Poznámka</th>
+            <th>Potvrzeno</th><th>Poznámka</th><th>Úpravy</th><th></th>
           </tr>
         </thead>
         <tbody>
-          <tr
-            v-for="e in entries"
-            :key="e.id"
-            :class="{ 'row-holiday': e.is_holiday, 'row-weekend': e.is_weekend && !e.is_holiday }"
-          >
-            <td>{{ e.date }}</td>
-            <td v-if="isAdmin">{{ courierName(e.user_id) }}</td>
-            <td>{{ routes.find(r => r.id === e.route_id)?.name || e.route_id }}</td>
-            <td class="num">{{ e.km_driven }}</td>
-            <td class="num">{{ e.packages_delivered }}</td>
-            <td class="num">{{ e.hours_worked }}</td>
-            <td v-for="f in activeFields" :key="f.id" class="num">{{ e.extra_fields[f.key] ?? '—' }}</td>
-            <td>{{ e.confirmed ? '✓' : '—' }}</td>
-            <td>{{ e.note }}</td>
-          </tr>
+          <template v-for="e in entries" :key="e.id">
+            <tr :class="{ 'row-holiday': e.is_holiday, 'row-weekend': e.is_weekend && !e.is_holiday }">
+              <td>{{ e.date }}</td>
+              <td v-if="isAdmin">{{ courierName(e.user_id) }}</td>
+              <td>{{ routes.find(r => r.id === e.route_id)?.name || e.route_id }}</td>
+              <td class="num">{{ e.km_driven }}</td>
+              <td class="num">{{ e.packages_delivered }}</td>
+              <td class="num">{{ e.hours_worked }}</td>
+              <td v-for="f in activeFields" :key="f.id" class="num">{{ e.extra_fields[f.key] ?? '—' }}</td>
+              <td>{{ e.confirmed ? '✓' : '—' }}</td>
+              <td>{{ e.note }}</td>
+              <td>
+                <span v-if="e.is_late_edit" class="badge unpaid">upraveno po termínu</span>
+                <span v-else-if="e.edit_count" class="badge paid">upraveno</span>
+                <span v-else style="color:var(--muted)">—</span>
+              </td>
+              <td style="white-space:nowrap">
+                <button v-if="canEdit(e)" class="btn secondary" @click="startEdit(e)">Upravit</button>
+                <button
+                  v-if="isAdmin && e.edit_count"
+                  class="btn secondary"
+                  style="margin-left:6px"
+                  @click="toggleLog(e.id)"
+                >
+                  {{ expandedLogId === e.id ? 'Skrýt log' : `Log (${e.edit_count})` }}
+                </button>
+              </td>
+            </tr>
+            <tr v-if="expandedLogId === e.id">
+              <td colspan="100" style="background:var(--paper)">
+                <div v-if="loadingLog === e.id" style="font-size:13px;color:var(--muted)">Načítám log…</div>
+                <div v-else-if="!editLogs[e.id]?.length" style="font-size:13px;color:var(--muted)">
+                  Zatím žádné úpravy.
+                </div>
+                <ul v-else style="list-style:none;margin:0;padding:0;font-size:13px">
+                  <li
+                    v-for="log in editLogs[e.id]"
+                    :key="log.id"
+                    style="padding:8px 0;border-bottom:1px solid var(--border)"
+                  >
+                    <strong>{{ log.edited_by_name }}</strong>
+                    · {{ new Date(log.edited_at).toLocaleString('cs-CZ') }}
+                    <ul style="margin:4px 0 0;padding-left:18px">
+                      <li v-for="(change, field) in log.changes" :key="field">
+                        {{ fieldLabels[field] || field }}:
+                        <code>{{ formatChangeValue(field, change.old) }}</code> →
+                        <code>{{ formatChangeValue(field, change.new) }}</code>
+                      </li>
+                    </ul>
+                  </li>
+                </ul>
+              </td>
+            </tr>
+          </template>
         </tbody>
       </table>
       <p style="font-size:12px;color:var(--muted);margin:10px 0 0">

@@ -3,7 +3,7 @@ import io
 import re
 import unicodedata
 from datetime import date as date_type
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -13,13 +13,27 @@ from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user, require_admin
 from models import (
-    User, UserRole, Route, PerformanceEntry, PerformanceFieldDefinition, Notification,
+    User, UserRole, Route, PerformanceEntry, PerformanceEntryEdit, PerformanceFieldDefinition,
+    Notification,
 )
 from schemas import (
     RouteCreate, RouteOut, RouteAssignmentUpdate, PerformanceFieldCreate, PerformanceFieldUpdate,
-    PerformanceFieldOut, PerformanceEntryCreate, PerformanceEntryOut, PerformanceAverages,
+    PerformanceFieldOut, PerformanceEntryCreate, PerformanceEntryOut, PerformanceEntryEditOut,
+    PerformanceAverages,
 )
 from holidays import is_czech_state_holiday
+
+# Sledovaná pole při úpravě záznamu - u těchto se do logu ukládá stará/nová hodnota.
+_TRACKED_FIELDS = [
+    "route_id", "date", "km_driven", "packages_delivered",
+    "hours_worked", "note", "confirmed", "extra_fields",
+]
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, date_type):
+        return value.isoformat()
+    return value
 
 router = APIRouter(prefix="/performance", tags=["performance"])
 
@@ -43,7 +57,19 @@ def _validate_extra_fields(db: Session, extra_fields: dict) -> None:
             raise HTTPException(400, f"Pole '{f.label}' je povinné")
 
 
+def _assert_route_date_free(db: Session, route_id: int, date: date_type, exclude_entry_id: Optional[int] = None) -> None:
+    """Na danou trasu a den smí existovat jen jeden záznam výkonu."""
+    q = db.query(PerformanceEntry).filter(
+        PerformanceEntry.route_id == route_id, PerformanceEntry.date == date,
+    )
+    if exclude_entry_id is not None:
+        q = q.filter(PerformanceEntry.id != exclude_entry_id)
+    if q.first():
+        raise HTTPException(400, "Pro tuto trasu a den už formulář existuje - uprav stávající záznam.")
+
+
 def _entry_to_out(entry: PerformanceEntry) -> PerformanceEntryOut:
+    edits = entry.edits
     return PerformanceEntryOut(
         id=entry.id,
         user_id=entry.user_id,
@@ -59,6 +85,8 @@ def _entry_to_out(entry: PerformanceEntry) -> PerformanceEntryOut:
         updated_by_id=entry.updated_by_id,
         is_weekend=entry.date.weekday() >= 5,
         is_holiday=is_czech_state_holiday(entry.date),
+        edit_count=len(edits),
+        is_late_edit=any(e.edited_at.date() > entry.date for e in edits),
     )
 
 
@@ -185,6 +213,7 @@ def create_entry(
 ):
     _assert_route_allowed(current_user, payload.route_id)
     _validate_extra_fields(db, payload.extra_fields)
+    _assert_route_date_free(db, payload.route_id, payload.date)
     entry = PerformanceEntry(
         user_id=current_user.id,
         route_id=payload.route_id,
@@ -229,13 +258,42 @@ def update_entry(
         raise HTTPException(403, "Nemáš oprávnění upravit tento záznam")
     _assert_route_allowed(current_user, payload.route_id)
     _validate_extra_fields(db, payload.extra_fields)
+    if payload.route_id != entry.route_id or payload.date != entry.date:
+        _assert_route_date_free(db, payload.route_id, payload.date, exclude_entry_id=entry.id)
+
+    changes = {}
+    for field in _TRACKED_FIELDS:
+        old_value = getattr(entry, field)
+        new_value = getattr(payload, field)
+        if old_value != new_value:
+            changes[field] = {"old": _jsonable(old_value), "new": _jsonable(new_value)}
 
     for field, value in payload.model_dump().items():
         setattr(entry, field, value)
     entry.updated_by_id = current_user.id
+
+    if changes:
+        db.add(PerformanceEntryEdit(
+            entry_id=entry.id, edited_by_id=current_user.id, changes=changes,
+        ))
+
     db.commit()
     db.refresh(entry)
     return _entry_to_out(entry)
+
+
+@router.get("/{entry_id}/edits", response_model=list[PerformanceEntryEditOut])
+def list_entry_edits(entry_id: int, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    entry = db.query(PerformanceEntry).filter(PerformanceEntry.id == entry_id).first()
+    if not entry:
+        raise HTTPException(404, "Záznam nenalezen")
+    return [
+        PerformanceEntryEditOut(
+            id=e.id, edited_by_id=e.edited_by_id, edited_by_name=e.edited_by.full_name,
+            edited_at=e.edited_at, changes=e.changes or {},
+        )
+        for e in entry.edits
+    ]
 
 
 @router.get("", response_model=list[PerformanceEntryOut])

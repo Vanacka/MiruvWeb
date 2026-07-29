@@ -149,6 +149,16 @@ class PerformanceEntryOut(BaseModel):
     updated_by_id: Optional[int]
     is_weekend: bool
     is_holiday: bool
+    edit_count: int
+    is_late_edit: bool  # aspoň jedna úprava proběhla v jiný den, než na který záznam je
+
+
+class PerformanceEntryEditOut(BaseModel):
+    id: int
+    edited_by_id: int
+    edited_by_name: str
+    edited_at: datetime
+    changes: dict[str, Any]
 
 
 class PerformanceAverages(BaseModel):
