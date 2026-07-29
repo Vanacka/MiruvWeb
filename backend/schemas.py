@@ -1,8 +1,8 @@
 from datetime import date, datetime
-from typing import Optional
+from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict
 
-from models import UserRole, FuelStatus, VacationStatus
+from models import UserRole, FuelStatus, VacationStatus, PerformanceFieldType
 
 
 # ---------- Auth / Users ----------
@@ -98,6 +98,30 @@ class RouteCreate(BaseModel):
     name: str
 
 
+class PerformanceFieldCreate(BaseModel):
+    label: str
+    field_type: PerformanceFieldType = PerformanceFieldType.number
+    required: bool = False
+
+
+class PerformanceFieldUpdate(BaseModel):
+    label: Optional[str] = None
+    required: Optional[bool] = None
+    active: Optional[bool] = None
+    position: Optional[int] = None
+
+
+class PerformanceFieldOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    key: str
+    label: str
+    field_type: PerformanceFieldType
+    required: bool
+    position: int
+    active: bool
+
+
 class PerformanceEntryCreate(BaseModel):
     route_id: int
     date: date
@@ -106,6 +130,7 @@ class PerformanceEntryCreate(BaseModel):
     hours_worked: float = 0
     note: Optional[str] = None
     confirmed: bool = False
+    extra_fields: dict[str, Any] = {}
 
 
 class PerformanceEntryOut(BaseModel):
@@ -119,6 +144,7 @@ class PerformanceEntryOut(BaseModel):
     hours_worked: float
     note: Optional[str]
     confirmed: bool
+    extra_fields: dict[str, Any]
     updated_at: datetime
     updated_by_id: Optional[int]
 

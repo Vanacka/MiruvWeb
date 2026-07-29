@@ -1,20 +1,23 @@
 import csv
 import io
+import re
+import unicodedata
 from datetime import date as date_type
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database import get_db
 from auth import get_current_user, require_admin
 from models import (
-    User, UserRole, Route, PerformanceEntry, Notification,
+    User, UserRole, Route, PerformanceEntry, PerformanceFieldDefinition, Notification,
 )
 from schemas import (
-    RouteCreate, RouteOut, RouteAssignmentUpdate, PerformanceEntryCreate, PerformanceEntryOut,
-    PerformanceAverages,
+    RouteCreate, RouteOut, RouteAssignmentUpdate, PerformanceFieldCreate, PerformanceFieldUpdate,
+    PerformanceFieldOut, PerformanceEntryCreate, PerformanceEntryOut, PerformanceAverages,
 )
 
 router = APIRouter(prefix="/performance", tags=["performance"])
@@ -28,6 +31,39 @@ def _assert_route_allowed(user: User, route_id: int) -> None:
         return
     if user.preferred_routes and route_id not in {r.id for r in user.preferred_routes}:
         raise HTTPException(403, "Tato trasa není mezi tvými přiřazenými trasami")
+
+
+def _validate_extra_fields(db: Session, extra_fields: dict) -> None:
+    active_fields = db.query(PerformanceFieldDefinition).filter(
+        PerformanceFieldDefinition.active == True  # noqa: E712
+    ).all()
+    for f in active_fields:
+        if f.required and not str(extra_fields.get(f.key, "")).strip():
+            raise HTTPException(400, f"Pole '{f.label}' je povinné")
+
+
+def _entry_to_out(entry: PerformanceEntry) -> PerformanceEntryOut:
+    return PerformanceEntryOut(
+        id=entry.id,
+        user_id=entry.user_id,
+        route_id=entry.route_id,
+        date=entry.date,
+        km_driven=entry.km_driven,
+        packages_delivered=entry.packages_delivered,
+        hours_worked=entry.hours_worked,
+        note=entry.note,
+        confirmed=entry.confirmed,
+        extra_fields=entry.extra_fields or {},
+        updated_at=entry.updated_at,
+        updated_by_id=entry.updated_by_id,
+    )
+
+
+def _slugify_field_key(label: str) -> str:
+    normalized = unicodedata.normalize("NFKD", label)
+    ascii_str = normalized.encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", ascii_str.strip().lower()).strip("_")
+    return slug or "field"
 
 
 # ---------- Trasy ----------
@@ -82,6 +118,60 @@ def set_route_assignments(
     return user.preferred_routes
 
 
+# ---------- Vlastní pole formuláře ----------
+
+@router.get("/fields", response_model=list[PerformanceFieldOut])
+def list_fields(db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    """Všechna pole (i neaktivní) - pro admin správu."""
+    return db.query(PerformanceFieldDefinition).order_by(PerformanceFieldDefinition.position).all()
+
+
+@router.get("/fields/active", response_model=list[PerformanceFieldOut])
+def list_active_fields(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    """Aktivní pole - pro vykreslení formuláře kurýrům."""
+    return db.query(PerformanceFieldDefinition).filter(
+        PerformanceFieldDefinition.active == True  # noqa: E712
+    ).order_by(PerformanceFieldDefinition.position).all()
+
+
+@router.post("/fields", response_model=PerformanceFieldOut)
+def create_field(
+    payload: PerformanceFieldCreate, db: Session = Depends(get_db), _: User = Depends(require_admin),
+):
+    base_key = _slugify_field_key(payload.label)
+    key = base_key
+    n = 2
+    while db.query(PerformanceFieldDefinition).filter(PerformanceFieldDefinition.key == key).first():
+        key = f"{base_key}_{n}"
+        n += 1
+    max_position = db.query(func.max(PerformanceFieldDefinition.position)).scalar() or 0
+    field = PerformanceFieldDefinition(
+        key=key, label=payload.label, field_type=payload.field_type,
+        required=payload.required, position=max_position + 1,
+    )
+    db.add(field)
+    db.commit()
+    db.refresh(field)
+    return field
+
+
+@router.patch("/fields/{field_id}", response_model=PerformanceFieldOut)
+def update_field(
+    field_id: int,
+    payload: PerformanceFieldUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    field = db.query(PerformanceFieldDefinition).filter(PerformanceFieldDefinition.id == field_id).first()
+    if not field:
+        raise HTTPException(404, "Pole nenalezeno")
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(field, key, value)
+    db.commit()
+    db.refresh(field)
+    return field
+
+
 # ---------- Záznamy výkonu ----------
 
 @router.post("", response_model=PerformanceEntryOut)
@@ -91,6 +181,7 @@ def create_entry(
     current_user: User = Depends(get_current_user),
 ):
     _assert_route_allowed(current_user, payload.route_id)
+    _validate_extra_fields(db, payload.extra_fields)
     entry = PerformanceEntry(
         user_id=current_user.id,
         route_id=payload.route_id,
@@ -100,6 +191,7 @@ def create_entry(
         hours_worked=payload.hours_worked,
         note=payload.note,
         confirmed=payload.confirmed,
+        extra_fields=payload.extra_fields,
         updated_by_id=current_user.id,
     )
     db.add(entry)
@@ -116,7 +208,7 @@ def create_entry(
             ))
         db.commit()
 
-    return entry
+    return _entry_to_out(entry)
 
 
 @router.patch("/{entry_id}", response_model=PerformanceEntryOut)
@@ -133,13 +225,14 @@ def update_entry(
     if current_user.role != UserRole.admin and entry.user_id != current_user.id:
         raise HTTPException(403, "Nemáš oprávnění upravit tento záznam")
     _assert_route_allowed(current_user, payload.route_id)
+    _validate_extra_fields(db, payload.extra_fields)
 
     for field, value in payload.model_dump().items():
         setattr(entry, field, value)
     entry.updated_by_id = current_user.id
     db.commit()
     db.refresh(entry)
-    return entry
+    return _entry_to_out(entry)
 
 
 @router.get("", response_model=list[PerformanceEntryOut])
@@ -169,7 +262,7 @@ def list_entries(
     if day:
         entries = [e for e in entries if e.date.day == day]
 
-    return entries
+    return [_entry_to_out(e) for e in entries]
 
 
 @router.get("/export.csv")

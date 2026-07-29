@@ -4,6 +4,15 @@ import { api } from '../api/client'
 import { useAuth } from '../stores/auth'
 
 interface Route { id: number; name: string }
+interface FieldDef {
+  id: number
+  key: string
+  label: string
+  field_type: 'number' | 'text'
+  required: boolean
+  position: number
+  active: boolean
+}
 interface Entry {
   id: number
   user_id: number
@@ -14,6 +23,7 @@ interface Entry {
   hours_worked: number
   note: string | null
   confirmed: boolean
+  extra_fields: Record<string, string | number>
 }
 interface Average {
   user_id: number
@@ -29,6 +39,8 @@ const isAdmin = computed(() => user.value?.role === 'admin')
 
 const routes = ref<Route[]>([])
 const myRoutes = ref<Route[]>([])
+const activeFields = ref<FieldDef[]>([])
+const allFields = ref<FieldDef[]>([])
 const entries = ref<Entry[]>([])
 const averages = ref<Average[]>([])
 
@@ -44,13 +56,25 @@ const form = ref({
   hours_worked: 0,
   note: '',
   confirmed: false,
+  extra_fields: {} as Record<string, string>,
 })
 const submitting = ref(false)
 const formError = ref('')
 
+const newField = ref({ label: '', field_type: 'number' as 'number' | 'text', required: false })
+const fieldSubmitting = ref(false)
+const fieldError = ref('')
+
 async function loadRoutes() {
   routes.value = await api.get<Route[]>('/performance/routes')
   myRoutes.value = await api.get<Route[]>('/performance/routes/mine')
+}
+
+async function loadFields() {
+  activeFields.value = await api.get<FieldDef[]>('/performance/fields/active')
+  if (isAdmin.value) {
+    allFields.value = await api.get<FieldDef[]>('/performance/fields')
+  }
 }
 
 async function loadEntries() {
@@ -79,12 +103,33 @@ async function submit() {
     await api.post('/performance', form.value)
     form.value.note = ''
     form.value.confirmed = false
+    form.value.extra_fields = {}
     await loadEntries()
   } catch (e) {
     formError.value = e instanceof Error ? e.message : 'Nepodařilo se uložit'
   } finally {
     submitting.value = false
   }
+}
+
+async function submitField() {
+  fieldError.value = ''
+  if (!newField.value.label.trim()) return
+  fieldSubmitting.value = true
+  try {
+    await api.post('/performance/fields', newField.value)
+    newField.value = { label: '', field_type: 'number', required: false }
+    await loadFields()
+  } catch (e) {
+    fieldError.value = e instanceof Error ? e.message : 'Nepodařilo se přidat pole'
+  } finally {
+    fieldSubmitting.value = false
+  }
+}
+
+async function toggleFieldActive(f: FieldDef) {
+  await api.patch(`/performance/fields/${f.id}`, { active: !f.active })
+  await loadFields()
 }
 
 function exportCsv() {
@@ -101,7 +146,7 @@ function exportCsv() {
 }
 
 onMounted(async () => {
-  await loadRoutes()
+  await Promise.all([loadRoutes(), loadFields()])
   await loadEntries()
   await loadAverages()
 })
@@ -150,6 +195,16 @@ onMounted(async () => {
             <input v-model="form.note" />
           </div>
         </div>
+        <div class="form-row" v-if="activeFields.length">
+          <div class="field" v-for="f in activeFields" :key="f.id">
+            <label>{{ f.label }}<span v-if="f.required"> *</span></label>
+            <input
+              v-model="form.extra_fields[f.key]"
+              :type="f.field_type === 'number' ? 'number' : 'text'"
+              :required="f.required"
+            />
+          </div>
+        </div>
         <div class="field" style="display:flex;align-items:center;gap:8px">
           <input id="confirmed" type="checkbox" v-model="form.confirmed" style="width:auto" />
           <label for="confirmed" style="margin:0">Formulář je kompletně vyplněný</label>
@@ -162,6 +217,58 @@ onMounted(async () => {
         </button>
         <p v-if="formError" class="error">{{ formError }}</p>
       </form>
+    </div>
+
+    <div class="card" v-if="isAdmin">
+      <h3 style="margin-top:0">Vlastní pole formuláře</h3>
+      <p style="font-size:12px;color:var(--muted);margin-top:-8px">
+        Přidej si vlastní sloupec do formuláře výkonu (např. počet krabic). Neaktivní pole zůstanou
+        zachovaná u starých záznamů, jen zmizí z formuláře a tabulky.
+      </p>
+      <form @submit.prevent="submitField" style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:14px">
+        <div class="field" style="margin:0;flex:1;min-width:160px">
+          <label>Název pole</label>
+          <input v-model="newField.label" placeholder="např. Počet krabic" />
+        </div>
+        <div class="field" style="margin:0">
+          <label>Typ</label>
+          <select v-model="newField.field_type">
+            <option value="number">Číslo</option>
+            <option value="text">Text</option>
+          </select>
+        </div>
+        <div class="field" style="margin:0;display:flex;align-items:center;gap:6px">
+          <input id="field-required" type="checkbox" v-model="newField.required" style="width:auto" />
+          <label for="field-required" style="margin:0">Povinné</label>
+        </div>
+        <button class="btn secondary" type="submit" :disabled="fieldSubmitting">
+          {{ fieldSubmitting ? 'Přidávám…' : 'Přidat pole' }}
+        </button>
+      </form>
+      <p v-if="fieldError" class="error" style="margin-top:-8px">{{ fieldError }}</p>
+      <p v-if="!allFields.length" style="color:var(--muted);margin:0">Zatím nemáš žádná vlastní pole.</p>
+      <table v-else>
+        <thead>
+          <tr><th>Název</th><th>Typ</th><th>Povinné</th><th>Stav</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="f in allFields" :key="f.id">
+            <td>{{ f.label }}</td>
+            <td>{{ f.field_type === 'number' ? 'číslo' : 'text' }}</td>
+            <td>{{ f.required ? 'ano' : 'ne' }}</td>
+            <td>
+              <span class="badge" :class="f.active ? 'paid' : 'unpaid'">
+                {{ f.active ? 'aktivní' : 'neaktivní' }}
+              </span>
+            </td>
+            <td>
+              <button class="btn secondary" @click="toggleFieldActive(f)">
+                {{ f.active ? 'Deaktivovat' : 'Aktivovat' }}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
 
     <div class="card">
@@ -188,7 +295,9 @@ onMounted(async () => {
         <thead>
           <tr>
             <th>Datum</th><th>Trasa</th><th class="num">Km</th><th class="num">Zásilky</th>
-            <th class="num">Hodiny</th><th>Potvrzeno</th><th>Poznámka</th>
+            <th class="num">Hodiny</th>
+            <th v-for="f in activeFields" :key="f.id" class="num">{{ f.label }}</th>
+            <th>Potvrzeno</th><th>Poznámka</th>
           </tr>
         </thead>
         <tbody>
@@ -198,6 +307,7 @@ onMounted(async () => {
             <td class="num">{{ e.km_driven }}</td>
             <td class="num">{{ e.packages_delivered }}</td>
             <td class="num">{{ e.hours_worked }}</td>
+            <td v-for="f in activeFields" :key="f.id" class="num">{{ e.extra_fields[f.key] ?? '—' }}</td>
             <td>{{ e.confirmed ? '✓' : '—' }}</td>
             <td>{{ e.note }}</td>
           </tr>

@@ -114,6 +114,10 @@ class PerformanceEntry(Base):
     hours_worked = Column(Float, default=0)
     note = Column(Text, nullable=True)
 
+    # Hodnoty vlastních polí, která si admin sám přidal (viz PerformanceFieldDefinition),
+    # klíčované podle PerformanceFieldDefinition.key.
+    extra_fields = Column(JSON, default=dict)
+
     # Checkbox potvrzení vyplnění kurýrem
     confirmed = Column(Boolean, default=False)
 
@@ -123,6 +127,25 @@ class PerformanceEntry(Base):
 
     user = relationship("User", back_populates="performance_entries", foreign_keys=[user_id])
     route = relationship("Route", back_populates="performance_entries")
+
+
+class PerformanceFieldType(str, enum.Enum):
+    number = "number"
+    text = "text"
+
+
+class PerformanceFieldDefinition(Base):
+    """Vlastní pole formuláře výkonu, která si admin může sám přidávat
+    (např. 'počet krabic'), aniž by bylo potřeba měnit kód."""
+    __tablename__ = "performance_field_definitions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, unique=True, nullable=False)
+    label = Column(String, nullable=False)
+    field_type = Column(Enum(PerformanceFieldType), default=PerformanceFieldType.number, nullable=False)
+    required = Column(Boolean, default=False)
+    position = Column(Integer, default=0)
+    active = Column(Boolean, default=True)
 
 
 class DailyChecklist(Base):
