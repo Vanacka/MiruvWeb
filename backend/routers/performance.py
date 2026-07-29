@@ -2,7 +2,7 @@ import csv
 import io
 import re
 import unicodedata
-from datetime import date as date_type
+from datetime import date as date_type, datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,13 +13,13 @@ from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user, require_admin
 from models import (
-    User, UserRole, Route, PerformanceEntry, PerformanceEntryEdit, PerformanceFieldDefinition,
-    Notification,
+    User, UserRole, Route, PerformanceEntry, PerformanceEntryEdit, PerformanceEntryDispute,
+    DisputeStatus, PerformanceFieldDefinition, Notification,
 )
 from schemas import (
     RouteCreate, RouteOut, RouteAssignmentUpdate, PerformanceFieldCreate, PerformanceFieldUpdate,
     PerformanceFieldOut, PerformanceEntryCreate, PerformanceEntryOut, PerformanceEntryEditOut,
-    PerformanceAverages,
+    DisputeCreate, DisputeResolve, PerformanceEntryDisputeOut, PerformanceAverages,
 )
 from holidays import is_czech_state_holiday
 
@@ -87,6 +87,32 @@ def _entry_to_out(entry: PerformanceEntry) -> PerformanceEntryOut:
         is_holiday=is_czech_state_holiday(entry.date),
         edit_count=len(edits),
         is_late_edit=any(e.edited_at.date() > entry.date for e in edits),
+    )
+
+
+def _dispute_to_out(dispute: PerformanceEntryDispute) -> PerformanceEntryDisputeOut:
+    conflicting = dispute.conflicting_entry
+    return PerformanceEntryDisputeOut(
+        id=dispute.id,
+        route_id=dispute.route_id,
+        route_name=dispute.route.name,
+        date=dispute.date,
+        status=dispute.status,
+        reported_by_id=dispute.reported_by_id,
+        reported_by_name=dispute.reported_by.full_name,
+        proposed_km_driven=dispute.proposed_km_driven,
+        proposed_packages_delivered=dispute.proposed_packages_delivered,
+        proposed_hours_worked=dispute.proposed_hours_worked,
+        proposed_note=dispute.proposed_note,
+        proposed_confirmed=dispute.proposed_confirmed,
+        proposed_extra_fields=dispute.proposed_extra_fields or {},
+        conflicting_entry=_entry_to_out(conflicting),
+        conflicting_entry_owner_name=conflicting.user.full_name,
+        corrected_route_id=dispute.corrected_route_id,
+        corrected_route_name=dispute.corrected_route.name if dispute.corrected_route else None,
+        created_at=dispute.created_at,
+        resolved_at=dispute.resolved_at,
+        resolved_by_name=dispute.resolved_by.full_name if dispute.resolved_by else None,
     )
 
 
@@ -213,7 +239,22 @@ def create_entry(
 ):
     _assert_route_allowed(current_user, payload.route_id)
     _validate_extra_fields(db, payload.extra_fields)
-    _assert_route_date_free(db, payload.route_id, payload.date)
+
+    conflicting = db.query(PerformanceEntry).filter(
+        PerformanceEntry.route_id == payload.route_id, PerformanceEntry.date == payload.date,
+    ).first()
+    if conflicting:
+        is_mine = conflicting.user_id == current_user.id
+        raise HTTPException(409, detail={
+            "message": (
+                "Pro tuto trasu a den už máš záznam - uprav ho."
+                if is_mine else
+                f"Tuto trasu na {payload.date.isoformat()} už vyplnil {conflicting.user.full_name}."
+            ),
+            "conflicting_entry_id": conflicting.id,
+            "is_mine": is_mine,
+        })
+
     entry = PerformanceEntry(
         user_id=current_user.id,
         route_id=payload.route_id,
@@ -294,6 +335,145 @@ def list_entry_edits(entry_id: int, db: Session = Depends(get_db), _: User = Dep
         )
         for e in entry.edits
     ]
+
+
+# ---------- Nahlášené chyby (kolize na trase/dni) ----------
+
+@router.post("/disputes", response_model=PerformanceEntryDisputeOut)
+def create_dispute(
+    payload: DisputeCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Kurýr nahlásí, že na tuto trasu/den už omylem vyplnil formulář někdo jiný.
+    Nic se nezapíše do performance_entries - jen se pošle admin(ům) ke schválení."""
+    conflicting = db.query(PerformanceEntry).filter(
+        PerformanceEntry.route_id == payload.route_id, PerformanceEntry.date == payload.date,
+    ).first()
+    if not conflicting:
+        raise HTTPException(400, "Pro tuto trasu a den zatím žádný záznam neexistuje - vyplň ho normálně.")
+    if conflicting.user_id == current_user.id:
+        raise HTTPException(400, "Tohle je tvůj vlastní záznam - uprav ho místo nahlašování chyby.")
+
+    existing_dispute = db.query(PerformanceEntryDispute).filter(
+        PerformanceEntryDispute.route_id == payload.route_id,
+        PerformanceEntryDispute.date == payload.date,
+        PerformanceEntryDispute.status == DisputeStatus.pending,
+    ).first()
+    if existing_dispute:
+        raise HTTPException(400, "Na tuto trasu a den už čeká nahlášená chyba na vyřízení.")
+
+    dispute = PerformanceEntryDispute(
+        route_id=payload.route_id,
+        date=payload.date,
+        conflicting_entry_id=conflicting.id,
+        reported_by_id=current_user.id,
+        proposed_km_driven=payload.km_driven,
+        proposed_packages_delivered=payload.packages_delivered,
+        proposed_hours_worked=payload.hours_worked,
+        proposed_note=payload.note,
+        proposed_confirmed=payload.confirmed,
+        proposed_extra_fields=payload.extra_fields,
+    )
+    db.add(dispute)
+    db.commit()
+    db.refresh(dispute)
+
+    admins = db.query(User).filter(User.role == UserRole.admin).all()
+    for admin in admins:
+        db.add(Notification(
+            recipient_id=admin.id,
+            message=(
+                f"{current_user.full_name} nahlásil chybu na trase '{conflicting.route.name}' "
+                f"({payload.date.isoformat()}) - formulář tam vyplnil {conflicting.user.full_name}."
+            ),
+        ))
+    db.commit()
+
+    return _dispute_to_out(dispute)
+
+
+@router.get("/disputes", response_model=list[PerformanceEntryDisputeOut])
+def list_disputes(
+    status: Optional[DisputeStatus] = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    q = db.query(PerformanceEntryDispute)
+    if status:
+        q = q.filter(PerformanceEntryDispute.status == status)
+    disputes = q.order_by(PerformanceEntryDispute.created_at.desc()).all()
+    return [_dispute_to_out(d) for d in disputes]
+
+
+@router.post("/disputes/{dispute_id}/approve", response_model=PerformanceEntryDisputeOut)
+def approve_dispute(
+    dispute_id: int,
+    payload: DisputeResolve,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    dispute = db.query(PerformanceEntryDispute).filter(PerformanceEntryDispute.id == dispute_id).first()
+    if not dispute:
+        raise HTTPException(404, "Spor nenalezen")
+    if dispute.status != DisputeStatus.pending:
+        raise HTTPException(400, "Tento spor už byl vyřízen")
+    if payload.corrected_route_id == dispute.route_id:
+        raise HTTPException(400, "Opravená trasa musí být jiná než ta sporná")
+    if not db.query(Route).filter(Route.id == payload.corrected_route_id).first():
+        raise HTTPException(404, "Opravená trasa nenalezena")
+
+    conflicting = dispute.conflicting_entry
+    old_route_id = conflicting.route_id
+    if payload.corrected_route_id != old_route_id:
+        db.add(PerformanceEntryEdit(
+            entry_id=conflicting.id,
+            edited_by_id=current_user.id,
+            changes={"route_id": {"old": old_route_id, "new": payload.corrected_route_id}},
+        ))
+        conflicting.route_id = payload.corrected_route_id
+        conflicting.updated_by_id = current_user.id
+
+    new_entry = PerformanceEntry(
+        user_id=dispute.reported_by_id,
+        route_id=dispute.route_id,
+        date=dispute.date,
+        km_driven=dispute.proposed_km_driven,
+        packages_delivered=dispute.proposed_packages_delivered,
+        hours_worked=dispute.proposed_hours_worked,
+        note=dispute.proposed_note,
+        confirmed=dispute.proposed_confirmed,
+        extra_fields=dispute.proposed_extra_fields or {},
+        updated_by_id=dispute.reported_by_id,
+    )
+    db.add(new_entry)
+
+    dispute.status = DisputeStatus.approved
+    dispute.corrected_route_id = payload.corrected_route_id
+    dispute.resolved_at = datetime.utcnow()
+    dispute.resolved_by_id = current_user.id
+
+    db.commit()
+    db.refresh(dispute)
+    return _dispute_to_out(dispute)
+
+
+@router.post("/disputes/{dispute_id}/reject", response_model=PerformanceEntryDisputeOut)
+def reject_dispute(
+    dispute_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin),
+):
+    dispute = db.query(PerformanceEntryDispute).filter(PerformanceEntryDispute.id == dispute_id).first()
+    if not dispute:
+        raise HTTPException(404, "Spor nenalezen")
+    if dispute.status != DisputeStatus.pending:
+        raise HTTPException(400, "Tento spor už byl vyřízen")
+
+    dispute.status = DisputeStatus.rejected
+    dispute.resolved_at = datetime.utcnow()
+    dispute.resolved_by_id = current_user.id
+    db.commit()
+    db.refresh(dispute)
+    return _dispute_to_out(dispute)
 
 
 @router.get("", response_model=list[PerformanceEntryOut])

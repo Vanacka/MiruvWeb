@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict
 
-from models import UserRole, FuelStatus, VacationStatus, PerformanceFieldType
+from models import UserRole, FuelStatus, VacationStatus, PerformanceFieldType, DisputeStatus
 
 
 # ---------- Auth / Users ----------
@@ -159,6 +159,44 @@ class PerformanceEntryEditOut(BaseModel):
     edited_by_name: str
     edited_at: datetime
     changes: dict[str, Any]
+
+
+class DisputeCreate(BaseModel):
+    route_id: int
+    date: date
+    km_driven: float = 0
+    packages_delivered: int = 0
+    hours_worked: float = 0
+    note: Optional[str] = None
+    confirmed: bool = False
+    extra_fields: dict[str, Any] = {}
+
+
+class DisputeResolve(BaseModel):
+    corrected_route_id: int
+
+
+class PerformanceEntryDisputeOut(BaseModel):
+    id: int
+    route_id: int
+    route_name: str
+    date: date
+    status: DisputeStatus
+    reported_by_id: int
+    reported_by_name: str
+    proposed_km_driven: float
+    proposed_packages_delivered: int
+    proposed_hours_worked: float
+    proposed_note: Optional[str]
+    proposed_confirmed: bool
+    proposed_extra_fields: dict[str, Any]
+    conflicting_entry: PerformanceEntryOut
+    conflicting_entry_owner_name: str
+    corrected_route_id: Optional[int]
+    corrected_route_name: Optional[str]
+    created_at: datetime
+    resolved_at: Optional[datetime]
+    resolved_by_name: Optional[str]
 
 
 class PerformanceAverages(BaseModel):

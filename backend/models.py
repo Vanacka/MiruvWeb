@@ -147,6 +147,48 @@ class PerformanceEntryEdit(Base):
     edited_by = relationship("User")
 
 
+class DisputeStatus(str, enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+
+
+class PerformanceEntryDispute(Base):
+    """Nahlášení, že na dané trase/dni je omylem záznam od jiného kurýra.
+    Nahlašující kurýr přiloží svoje vlastní údaje pro tu trasu/den, ale nic
+    se nezapíše do performance_entries, dokud to neschválí admin - ten zároveň
+    rozhodne, na jakou trasu se má přesunout ten původní (chybný) záznam."""
+    __tablename__ = "performance_entry_disputes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    route_id = Column(Integer, ForeignKey("routes.id"), nullable=False)
+    date = Column(Date, nullable=False)
+    conflicting_entry_id = Column(Integer, ForeignKey("performance_entries.id"), nullable=False)
+    reported_by_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # Údaje, které nahlašující kurýr tvrdí, že patří na tuto trasu/den
+    proposed_km_driven = Column(Float, default=0)
+    proposed_packages_delivered = Column(Integer, default=0)
+    proposed_hours_worked = Column(Float, default=0)
+    proposed_note = Column(Text, nullable=True)
+    proposed_confirmed = Column(Boolean, default=False)
+    proposed_extra_fields = Column(JSON, default=dict)
+
+    status = Column(Enum(DisputeStatus), default=DisputeStatus.pending, nullable=False)
+    # Trasa, na kterou admin při schválení přesune původní (chybný) záznam
+    corrected_route_id = Column(Integer, ForeignKey("routes.id"), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+    resolved_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+    route = relationship("Route", foreign_keys=[route_id])
+    corrected_route = relationship("Route", foreign_keys=[corrected_route_id])
+    conflicting_entry = relationship("PerformanceEntry", foreign_keys=[conflicting_entry_id])
+    reported_by = relationship("User", foreign_keys=[reported_by_id])
+    resolved_by = relationship("User", foreign_keys=[resolved_by_id])
+
+
 class PerformanceFieldType(str, enum.Enum):
     number = "number"
     text = "text"

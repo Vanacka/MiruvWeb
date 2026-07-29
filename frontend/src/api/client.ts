@@ -27,7 +27,12 @@ async function request<T>(
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(body.detail || 'Něco se pokazilo')
+    const message =
+      typeof body.detail === 'string' ? body.detail : body.detail?.message || 'Něco se pokazilo'
+    const err = new Error(message) as Error & { status?: number; detail?: unknown }
+    err.status = res.status
+    err.detail = body.detail
+    throw err
   }
 
   const contentType = res.headers.get('content-type') || ''

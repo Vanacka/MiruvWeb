@@ -45,6 +45,28 @@ interface EditLogEntry {
   edited_at: string
   changes: Record<string, { old: unknown; new: unknown }>
 }
+interface Dispute {
+  id: number
+  route_id: number
+  route_name: string
+  date: string
+  status: 'pending' | 'approved' | 'rejected'
+  reported_by_id: number
+  reported_by_name: string
+  proposed_km_driven: number
+  proposed_packages_delivered: number
+  proposed_hours_worked: number
+  proposed_note: string | null
+  proposed_confirmed: boolean
+  proposed_extra_fields: Record<string, string | number>
+  conflicting_entry: Entry
+  conflicting_entry_owner_name: string
+  corrected_route_id: number | null
+  corrected_route_name: string | null
+  created_at: string
+  resolved_at: string | null
+  resolved_by_name: string | null
+}
 
 const fieldLabels: Record<string, string> = {
   route_id: 'Trasa',
@@ -98,6 +120,13 @@ const form = ref(emptyForm())
 const submitting = ref(false)
 const formError = ref('')
 const editingId = ref<number | null>(null)
+const conflict = ref<{ message: string; conflictingEntryId: number } | null>(null)
+const disputeSubmitting = ref(false)
+const disputeSuccess = ref('')
+
+const disputes = ref<Dispute[]>([])
+const resolveRouteByDispute = ref<Record<number, number | null>>({})
+const disputeActionError = ref<Record<number, string>>({})
 
 const newField = ref({ label: '', field_type: 'number' as 'number' | 'text', required: false })
 const fieldSubmitting = ref(false)
@@ -137,6 +166,11 @@ async function loadFields() {
 async function loadUsers() {
   if (!isAdmin.value) return
   allUsers.value = await api.get<UserOption[]>('/auth/users')
+}
+
+async function loadDisputes() {
+  if (!isAdmin.value) return
+  disputes.value = await api.get<Dispute[]>('/performance/disputes')
 }
 
 async function loadEntries() {
@@ -191,6 +225,8 @@ function cancelEdit() {
 
 async function submit() {
   formError.value = ''
+  conflict.value = null
+  disputeSuccess.value = ''
   if (!form.value.route_id) {
     formError.value = 'Vyber trasu'
     return
@@ -208,19 +244,67 @@ async function submit() {
     }
     await loadEntries()
   } catch (e) {
+    const status = (e as { status?: number }).status
+    const detail = (e as { detail?: { message: string; conflicting_entry_id: number; is_mine: boolean } }).detail
     const message = e instanceof Error ? e.message : 'Nepodařilo se uložit'
-    // Pokud už na tuto trasu a den záznam existuje a smím ho upravit, rovnou tam přepneme.
-    const clash = entries.value.find(
-      (en) => en.route_id === form.value.route_id && en.date === form.value.date,
-    )
-    if (!editingId.value && clash && canEdit(clash)) {
-      startEdit(clash)
-      formError.value = `${message} Přepnuto do režimu úpravy stávajícího záznamu.`
+
+    if (!editingId.value && status === 409 && detail) {
+      if (detail.is_mine) {
+        const clash = entries.value.find((en) => en.id === detail.conflicting_entry_id)
+        if (clash) {
+          startEdit(clash)
+          formError.value = `${message} Přepnuto do režimu úpravy.`
+        } else {
+          formError.value = message
+        }
+      } else {
+        conflict.value = { message: detail.message, conflictingEntryId: detail.conflicting_entry_id }
+      }
     } else {
       formError.value = message
     }
   } finally {
     submitting.value = false
+  }
+}
+
+async function submitDispute() {
+  if (!form.value.route_id) return
+  disputeSubmitting.value = true
+  formError.value = ''
+  try {
+    await api.post('/performance/disputes', form.value)
+    conflict.value = null
+    disputeSuccess.value = 'Nahlášeno adminovi, čeká na schválení. Nic se zatím neuložilo.'
+    form.value = emptyForm()
+  } catch (e) {
+    formError.value = e instanceof Error ? e.message : 'Nepodařilo se nahlásit chybu'
+  } finally {
+    disputeSubmitting.value = false
+  }
+}
+
+async function approveDispute(d: Dispute) {
+  const correctedRouteId = resolveRouteByDispute.value[d.id]
+  if (!correctedRouteId) {
+    disputeActionError.value[d.id] = 'Vyber, na jakou trasu se má přesunout původní záznam.'
+    return
+  }
+  disputeActionError.value[d.id] = ''
+  try {
+    await api.post(`/performance/disputes/${d.id}/approve`, { corrected_route_id: correctedRouteId })
+    await Promise.all([loadDisputes(), loadEntries()])
+  } catch (e) {
+    disputeActionError.value[d.id] = e instanceof Error ? e.message : 'Nepodařilo se schválit'
+  }
+}
+
+async function rejectDispute(d: Dispute) {
+  try {
+    await api.post(`/performance/disputes/${d.id}/reject`)
+    await loadDisputes()
+  } catch (e) {
+    disputeActionError.value[d.id] = e instanceof Error ? e.message : 'Nepodařilo se zamítnout'
   }
 }
 
@@ -274,7 +358,7 @@ function exportCsv() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadRoutes(), loadFields(), loadUsers()])
+  await Promise.all([loadRoutes(), loadFields(), loadUsers(), loadDisputes()])
   await loadEntries()
   await loadAverages()
 })
@@ -351,6 +435,93 @@ onMounted(async () => {
         </button>
         <p v-if="formError" class="error">{{ formError }}</p>
       </form>
+
+      <div v-if="conflict" class="card" style="margin:14px 0 0;border-color:var(--red);background:#fdeeee">
+        <p style="margin:0 0 10px">{{ conflict.message }}</p>
+        <button class="btn" type="button" :disabled="disputeSubmitting" @click="submitDispute">
+          {{ disputeSubmitting ? 'Odesílám…' : 'Nahlásit chybu / vyžádat opravu' }}
+        </button>
+        <button class="btn secondary" type="button" style="margin-left:8px" @click="conflict = null">
+          Zrušit
+        </button>
+      </div>
+      <p v-if="disputeSuccess" style="color:var(--green);font-size:13px;margin:10px 0 0">{{ disputeSuccess }}</p>
+    </div>
+
+    <div class="card" v-if="isAdmin && disputes.filter(d => d.status === 'pending').length">
+      <h3 style="margin-top:0">Nahlášené chyby</h3>
+      <p style="font-size:12px;color:var(--muted);margin-top:-8px">
+        Kurýr nahlásil, že na tuto trasu/den už omylem vyplnil formulář někdo jiný. Vyber, na jakou
+        trasu se má přesunout původní (chybný) záznam, a schval - teprve pak se obě strany opraví.
+      </p>
+      <div
+        v-for="d in disputes.filter(x => x.status === 'pending')"
+        :key="d.id"
+        style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px"
+      >
+        <p style="margin:0 0 8px">
+          <strong>{{ d.route_name }}</strong> · {{ d.date }}
+        </p>
+        <div class="form-row">
+          <div>
+            <p style="font-size:12px;color:var(--muted);margin:0 0 4px">
+              Původní záznam (vyplnil {{ d.conflicting_entry_owner_name }})
+            </p>
+            <p style="font-size:13px;margin:0">
+              {{ d.conflicting_entry.km_driven }} km · {{ d.conflicting_entry.packages_delivered }} zásilek ·
+              {{ d.conflicting_entry.hours_worked }} h
+              <span v-if="d.conflicting_entry.note"> · „{{ d.conflicting_entry.note }}“</span>
+            </p>
+          </div>
+          <div>
+            <p style="font-size:12px;color:var(--muted);margin:0 0 4px">
+              Nahlásil {{ d.reported_by_name }} (tvrdí, že tohle patří na {{ d.route_name }})
+            </p>
+            <p style="font-size:13px;margin:0">
+              {{ d.proposed_km_driven }} km · {{ d.proposed_packages_delivered }} zásilek ·
+              {{ d.proposed_hours_worked }} h
+              <span v-if="d.proposed_note"> · „{{ d.proposed_note }}“</span>
+            </p>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-top:10px">
+          <div class="field" style="margin:0">
+            <label>Opravit trasu u {{ d.conflicting_entry_owner_name }} na</label>
+            <select v-model.number="resolveRouteByDispute[d.id]">
+              <option :value="null" disabled>Vyber správnou trasu</option>
+              <option v-for="r in routes.filter(x => x.id !== d.route_id)" :key="r.id" :value="r.id">
+                {{ r.name }}
+              </option>
+            </select>
+          </div>
+          <button class="btn" type="button" @click="approveDispute(d)">Schválit</button>
+          <button class="btn secondary" type="button" @click="rejectDispute(d)">Zamítnout</button>
+        </div>
+        <p v-if="disputeActionError[d.id]" class="error" style="margin-top:8px">{{ disputeActionError[d.id] }}</p>
+      </div>
+    </div>
+
+    <div class="card" v-if="isAdmin && disputes.filter(d => d.status !== 'pending').length">
+      <h3 style="margin-top:0">Vyřízené spory</h3>
+      <table>
+        <thead>
+          <tr><th>Trasa</th><th>Datum</th><th>Nahlásil</th><th>Stav</th><th>Vyřídil</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="d in disputes.filter(x => x.status !== 'pending')" :key="d.id">
+            <td>{{ d.route_name }}</td>
+            <td>{{ d.date }}</td>
+            <td>{{ d.reported_by_name }}</td>
+            <td>
+              <span class="badge" :class="d.status === 'approved' ? 'paid' : 'unpaid'">
+                {{ d.status === 'approved' ? 'schváleno' : 'zamítnuto' }}
+              </span>
+              <span v-if="d.corrected_route_name"> → {{ d.corrected_route_name }}</span>
+            </td>
+            <td>{{ d.resolved_by_name }}</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
 
     <div class="card" v-if="isAdmin">
