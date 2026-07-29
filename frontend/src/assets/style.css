@@ -523,6 +523,22 @@ label {
 .notif-list li p { margin: 0 0 4px; font-size: 13px; }
 .notif-time { font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
 
+/* ---------- Zvýraznění víkendů a svátků ve výkonu ---------- */
+
+tr.row-weekend td { background: #eef1f6; }
+tr.row-holiday td { background: #fdeeee; }
+
+.legend-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+.legend-swatch.row-weekend { background: #eef1f6; border: 1px solid var(--border); }
+.legend-swatch.row-holiday { background: #fdeeee; border: 1px solid var(--border); }
+
 .desktop-bell { display: none; }
 
 @media (min-width: 860px) {

@@ -147,6 +147,8 @@ class PerformanceEntryOut(BaseModel):
     extra_fields: dict[str, Any]
     updated_at: datetime
     updated_by_id: Optional[int]
+    is_weekend: bool
+    is_holiday: bool
 
 
 class PerformanceAverages(BaseModel):

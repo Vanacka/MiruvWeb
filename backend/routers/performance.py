@@ -19,6 +19,7 @@ from schemas import (
     RouteCreate, RouteOut, RouteAssignmentUpdate, PerformanceFieldCreate, PerformanceFieldUpdate,
     PerformanceFieldOut, PerformanceEntryCreate, PerformanceEntryOut, PerformanceAverages,
 )
+from holidays import is_czech_state_holiday
 
 router = APIRouter(prefix="/performance", tags=["performance"])
 
@@ -56,6 +57,8 @@ def _entry_to_out(entry: PerformanceEntry) -> PerformanceEntryOut:
         extra_fields=entry.extra_fields or {},
         updated_at=entry.updated_at,
         updated_by_id=entry.updated_by_id,
+        is_weekend=entry.date.weekday() >= 5,
+        is_holiday=is_czech_state_holiday(entry.date),
     )
 
 

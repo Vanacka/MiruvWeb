@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { api } from '../api/client'
 import { useAuth } from '../stores/auth'
 
@@ -24,6 +24,8 @@ interface Entry {
   note: string | null
   confirmed: boolean
   extra_fields: Record<string, string | number>
+  is_weekend: boolean
+  is_holiday: boolean
 }
 interface Average {
   user_id: number
@@ -33,6 +35,7 @@ interface Average {
   avg_hours: number
   entries_count: number
 }
+interface UserOption { id: number; full_name: string; role: 'admin' | 'courier' }
 
 const { user } = useAuth()
 const isAdmin = computed(() => user.value?.role === 'admin')
@@ -43,10 +46,20 @@ const activeFields = ref<FieldDef[]>([])
 const allFields = ref<FieldDef[]>([])
 const entries = ref<Entry[]>([])
 const averages = ref<Average[]>([])
+const allUsers = ref<UserOption[]>([])
 
 const selectedRoute = ref<number | null>(null)
+const selectedCourier = ref<number | null>(null)
+const filterMode = ref<'month' | 'day'>('month')
 const filterMonth = ref(new Date().getMonth() + 1)
 const filterYear = ref(new Date().getFullYear())
+const filterDay = ref(new Date().toISOString().slice(0, 10))
+
+watch(filterDay, (val) => {
+  const [y, m] = val.split('-').map(Number)
+  if (y) filterYear.value = y
+  if (m) filterMonth.value = m
+})
 
 const form = ref({
   route_id: null as number | null,
@@ -65,6 +78,10 @@ const newField = ref({ label: '', field_type: 'number' as 'number' | 'text', req
 const fieldSubmitting = ref(false)
 const fieldError = ref('')
 
+function courierName(userId: number) {
+  return allUsers.value.find((u) => u.id === userId)?.full_name || `#${userId}`
+}
+
 async function loadRoutes() {
   routes.value = await api.get<Route[]>('/performance/routes')
   myRoutes.value = await api.get<Route[]>('/performance/routes/mine')
@@ -77,19 +94,37 @@ async function loadFields() {
   }
 }
 
+async function loadUsers() {
+  if (!isAdmin.value) return
+  allUsers.value = await api.get<UserOption[]>('/auth/users')
+}
+
 async function loadEntries() {
   const params = new URLSearchParams()
   if (selectedRoute.value) params.set('route_id', String(selectedRoute.value))
-  params.set('year', String(filterYear.value))
-  params.set('month', String(filterMonth.value))
+  if (isAdmin.value && selectedCourier.value) params.set('user_id', String(selectedCourier.value))
+  if (filterMode.value === 'day') {
+    const [y, m, d] = filterDay.value.split('-').map(Number)
+    params.set('year', String(y))
+    params.set('month', String(m))
+    params.set('day', String(d))
+  } else {
+    params.set('year', String(filterYear.value))
+    params.set('month', String(filterMonth.value))
+  }
   entries.value = await api.get<Entry[]>(`/performance?${params}`)
 }
 
 async function loadAverages() {
   if (!isAdmin.value) return
   averages.value = await api.get<Average[]>(
-    `/performance/averages?year=${filterYear.value}&month=${filterMonth.value}`
+    `/performance/averages?year=${filterYear.value}&month=${filterMonth.value}`,
   )
+}
+
+function refreshFiltered() {
+  loadEntries()
+  loadAverages()
 }
 
 async function submit() {
@@ -146,7 +181,7 @@ function exportCsv() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadRoutes(), loadFields()])
+  await Promise.all([loadRoutes(), loadFields(), loadUsers()])
   await loadEntries()
   await loadAverages()
 })
@@ -280,29 +315,60 @@ onMounted(async () => {
             <option v-for="r in routes" :key="r.id" :value="r.id">{{ r.name }}</option>
           </select>
         </div>
-        <div class="field" style="margin:0">
-          <label>Měsíc</label>
-          <input v-model.number="filterMonth" type="number" min="1" max="12" @change="loadEntries(); loadAverages()" style="width:80px" />
+        <div class="field" style="margin:0" v-if="isAdmin">
+          <label>Kurýr</label>
+          <select v-model.number="selectedCourier" @change="loadEntries">
+            <option :value="null">Všichni</option>
+            <option v-for="u in allUsers" :key="u.id" :value="u.id">
+              {{ u.full_name }}{{ u.role === 'admin' ? ' (admin)' : '' }}
+            </option>
+          </select>
         </div>
         <div class="field" style="margin:0">
-          <label>Rok</label>
-          <input v-model.number="filterYear" type="number" @change="loadEntries(); loadAverages()" style="width:100px" />
+          <label>Zobrazit</label>
+          <select v-model="filterMode" @change="refreshFiltered">
+            <option value="month">Podle měsíce</option>
+            <option value="day">Podle konkrétního dne</option>
+          </select>
         </div>
+        <template v-if="filterMode === 'month'">
+          <div class="field" style="margin:0">
+            <label>Měsíc</label>
+            <input v-model.number="filterMonth" type="number" min="1" max="12" @change="refreshFiltered" style="width:80px" />
+          </div>
+          <div class="field" style="margin:0">
+            <label>Rok</label>
+            <input v-model.number="filterYear" type="number" @change="refreshFiltered" style="width:100px" />
+          </div>
+        </template>
+        <template v-else>
+          <div class="field" style="margin:0">
+            <label>Den</label>
+            <input v-model="filterDay" type="date" @change="refreshFiltered" />
+          </div>
+        </template>
         <button v-if="isAdmin" class="btn secondary" @click="exportCsv">Export do CSV</button>
       </div>
 
       <table>
         <thead>
           <tr>
-            <th>Datum</th><th>Trasa</th><th class="num">Km</th><th class="num">Zásilky</th>
+            <th>Datum</th>
+            <th v-if="isAdmin">Kurýr</th>
+            <th>Trasa</th><th class="num">Km</th><th class="num">Zásilky</th>
             <th class="num">Hodiny</th>
             <th v-for="f in activeFields" :key="f.id" class="num">{{ f.label }}</th>
             <th>Potvrzeno</th><th>Poznámka</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="e in entries" :key="e.id">
+          <tr
+            v-for="e in entries"
+            :key="e.id"
+            :class="{ 'row-holiday': e.is_holiday, 'row-weekend': e.is_weekend && !e.is_holiday }"
+          >
             <td>{{ e.date }}</td>
+            <td v-if="isAdmin">{{ courierName(e.user_id) }}</td>
             <td>{{ routes.find(r => r.id === e.route_id)?.name || e.route_id }}</td>
             <td class="num">{{ e.km_driven }}</td>
             <td class="num">{{ e.packages_delivered }}</td>
@@ -313,6 +379,10 @@ onMounted(async () => {
           </tr>
         </tbody>
       </table>
+      <p style="font-size:12px;color:var(--muted);margin:10px 0 0">
+        <span class="legend-swatch row-weekend"></span> víkend &nbsp;
+        <span class="legend-swatch row-holiday"></span> státní svátek
+      </p>
     </div>
 
     <div class="card" v-if="isAdmin && averages.length">
