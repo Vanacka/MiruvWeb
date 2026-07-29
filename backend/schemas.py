@@ -12,6 +12,12 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 
+class RouteOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    name: str
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -19,6 +25,11 @@ class UserOut(BaseModel):
     full_name: str
     role: UserRole
     vacation_days_limit: int
+    preferred_routes: list[RouteOut] = []
+
+
+class RouteAssignmentUpdate(BaseModel):
+    route_ids: list[int]
 
 
 class UserCreate(BaseModel):
@@ -84,12 +95,6 @@ class VacationDayColor(BaseModel):
 # ---------- Performance ----------
 
 class RouteCreate(BaseModel):
-    name: str
-
-
-class RouteOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
     name: str
 
 

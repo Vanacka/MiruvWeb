@@ -13,11 +13,21 @@ from models import (
     User, UserRole, Route, PerformanceEntry, Notification,
 )
 from schemas import (
-    RouteCreate, RouteOut, PerformanceEntryCreate, PerformanceEntryOut,
+    RouteCreate, RouteOut, RouteAssignmentUpdate, PerformanceEntryCreate, PerformanceEntryOut,
     PerformanceAverages,
 )
 
 router = APIRouter(prefix="/performance", tags=["performance"])
+
+
+def _assert_route_allowed(user: User, route_id: int) -> None:
+    """Admin smí vyplnit formulář na jakoukoliv trasu. Kurýr jen na svoje
+    přiřazené preferované trasy - pokud zatím žádné nemá přiřazené, smí
+    (dočasně) na kteroukoliv, aby nezůstal zaseknutý než mu je Mirek nastaví."""
+    if user.role == UserRole.admin:
+        return
+    if user.preferred_routes and route_id not in {r.id for r in user.preferred_routes}:
+        raise HTTPException(403, "Tato trasa není mezi tvými přiřazenými trasami")
 
 
 # ---------- Trasy ----------
@@ -38,6 +48,40 @@ def list_routes(db: Session = Depends(get_db), _: User = Depends(get_current_use
     return db.query(Route).all()
 
 
+@router.get("/routes/mine", response_model=list[RouteOut])
+def my_routes(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Trasy, které smí aktuální uživatel vyplňovat ve formuláři výkonu.
+    Bez přiřazení (ještě nenastaveno, nebo admin) vidí všechny."""
+    if current_user.role != UserRole.admin and current_user.preferred_routes:
+        return current_user.preferred_routes
+    return db.query(Route).all()
+
+
+@router.get("/routes/assignments/{user_id}", response_model=list[RouteOut])
+def get_route_assignments(user_id: int, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "Uživatel nenalezen")
+    return user.preferred_routes
+
+
+@router.put("/routes/assignments/{user_id}", response_model=list[RouteOut])
+def set_route_assignments(
+    user_id: int,
+    payload: RouteAssignmentUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "Uživatel nenalezen")
+    routes = db.query(Route).filter(Route.id.in_(payload.route_ids)).all()
+    user.preferred_routes = routes
+    db.commit()
+    db.refresh(user)
+    return user.preferred_routes
+
+
 # ---------- Záznamy výkonu ----------
 
 @router.post("", response_model=PerformanceEntryOut)
@@ -46,6 +90,7 @@ def create_entry(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    _assert_route_allowed(current_user, payload.route_id)
     entry = PerformanceEntry(
         user_id=current_user.id,
         route_id=payload.route_id,
@@ -87,6 +132,7 @@ def update_entry(
         raise HTTPException(404, "Záznam nenalezen")
     if current_user.role != UserRole.admin and entry.user_id != current_user.id:
         raise HTTPException(403, "Nemáš oprávnění upravit tento záznam")
+    _assert_route_allowed(current_user, payload.route_id)
 
     for field, value in payload.model_dump().items():
         setattr(entry, field, value)

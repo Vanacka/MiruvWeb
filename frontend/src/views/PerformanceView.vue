@@ -28,6 +28,7 @@ const { user } = useAuth()
 const isAdmin = computed(() => user.value?.role === 'admin')
 
 const routes = ref<Route[]>([])
+const myRoutes = ref<Route[]>([])
 const entries = ref<Entry[]>([])
 const averages = ref<Average[]>([])
 
@@ -49,6 +50,7 @@ const formError = ref('')
 
 async function loadRoutes() {
   routes.value = await api.get<Route[]>('/performance/routes')
+  myRoutes.value = await api.get<Route[]>('/performance/routes/mine')
 }
 
 async function loadEntries() {
@@ -117,8 +119,11 @@ onMounted(async () => {
             <label>Trasa</label>
             <select v-model.number="form.route_id" required>
               <option :value="null" disabled>Vyber trasu</option>
-              <option v-for="r in routes" :key="r.id" :value="r.id">{{ r.name }}</option>
+              <option v-for="r in myRoutes" :key="r.id" :value="r.id">{{ r.name }}</option>
             </select>
+            <p v-if="!myRoutes.length" style="font-size: 12px; color: var(--muted); margin: 4px 0 0">
+              Zatím nejsou založené žádné trasy.
+            </p>
           </div>
           <div class="field">
             <label>Datum</label>

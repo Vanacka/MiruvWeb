@@ -3,11 +3,20 @@ from datetime import datetime, date
 
 from sqlalchemy import (
     Column, Integer, String, Float, Boolean, Date, DateTime,
-    ForeignKey, Enum, Text, JSON, UniqueConstraint
+    ForeignKey, Enum, Text, JSON, UniqueConstraint, Table
 )
 from sqlalchemy.orm import relationship
 
 from database import Base
+
+# Preferované trasy kurýra - M:N mezi uživatelem a trasou.
+# Prázdný výběr = kurýr zatím nemá nic přiřazeno -> smí (dočasně) vyplňovat kteroukoliv trasu.
+user_preferred_routes = Table(
+    "user_preferred_routes",
+    Base.metadata,
+    Column("user_id", Integer, ForeignKey("users.id"), primary_key=True),
+    Column("route_id", Integer, ForeignKey("routes.id"), primary_key=True),
+)
 
 
 class UserRole(str, enum.Enum):
@@ -43,6 +52,9 @@ class User(Base):
         "PerformanceEntry",
         back_populates="user",
         foreign_keys="PerformanceEntry.user_id",
+    )
+    preferred_routes = relationship(
+        "Route", secondary=user_preferred_routes, back_populates="preferred_by",
     )
 
 
@@ -83,6 +95,9 @@ class Route(Base):
     name = Column(String, unique=True, nullable=False)
 
     performance_entries = relationship("PerformanceEntry", back_populates="route")
+    preferred_by = relationship(
+        "User", secondary=user_preferred_routes, back_populates="preferred_routes",
+    )
 
 
 class PerformanceEntry(Base):
