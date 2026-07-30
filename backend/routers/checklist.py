@@ -25,8 +25,12 @@ def _get_or_create_today(db: Session, user_id: int, today: date_type) -> DailyCh
 
 
 def _form_filled(db: Session, user_id: int, today: date_type) -> bool:
+    """Checklist se odškrtne jen když je záznam kompletně vyplněný (confirmed).
+    Pokud kurýr ve wizardu něco přeskočil a uložil to jen jako rozpracované,
+    záznam existuje, ale checklist zůstává neodškrtnutý."""
     return db.query(PerformanceEntry).filter(
         PerformanceEntry.user_id == user_id, PerformanceEntry.date == today,
+        PerformanceEntry.confirmed == True,  # noqa: E712
     ).first() is not None
 
 

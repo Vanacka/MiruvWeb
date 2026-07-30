@@ -24,6 +24,7 @@ interface Entry {
   note: string | null
   confirmed: boolean
   extra_fields: Record<string, string | number>
+  skipped_fields: string[]
   is_weekend: boolean
   is_holiday: boolean
   edit_count: number
@@ -44,6 +45,12 @@ interface EditLogEntry {
   edited_by_name: string
   edited_at: string
   changes: Record<string, { old: unknown; new: unknown }>
+}
+interface Step {
+  key: string
+  label: string
+  required: boolean
+  field_type: 'number' | 'text'
 }
 interface Dispute {
   id: number
@@ -124,6 +131,138 @@ const conflict = ref<{ message: string; conflictingEntryId: number } | null>(nul
 const disputeSubmitting = ref(false)
 const disputeSuccess = ref('')
 
+// Krokovací "vyplnění formuláře" místo ručního checkboxu - kurýr projde každou
+// položku a buď ji vyplní, nebo řekne "vyplním později". Jen pokud nic
+// nepřeskočí, označí se záznam jako kompletně vyplněný.
+const wizardActive = ref(false)
+const currentStep = ref(0)
+const skippedFields = ref<Set<string>>(new Set())
+
+// Když kurýr pokračuje v dřív rozpracovaném (nedokončeném) záznamu za dnešek,
+// wizard prochází jen položky, které tehdy nechal na později - a nikde se
+// nepíše, že jde o "úpravu", aby to nepůsobilo matoucně.
+const resuming = ref(false)
+const resumeSteps = ref<Step[] | null>(null)
+const todayEntry = ref<Entry | null>(null)
+
+const steps = computed<Step[]>(() => [
+  { key: 'km_driven', label: 'Kilometry', required: false, field_type: 'number' },
+  { key: 'packages_delivered', label: 'Počet zásilek', required: false, field_type: 'number' },
+  { key: 'hours_worked', label: 'Odpracované hodiny', required: false, field_type: 'number' },
+  ...activeFields.value.map((f) => ({
+    key: f.key, label: f.label, required: f.required, field_type: f.field_type,
+  })),
+  { key: 'note', label: 'Poznámka', required: false, field_type: 'text' },
+])
+
+const activeWizardSteps = computed<Step[]>(() => resumeSteps.value ?? steps.value)
+
+const fallbackStep: Step = { key: '', label: '', required: false, field_type: 'text' }
+const currentStepDef = computed<Step>(() => activeWizardSteps.value[currentStep.value] ?? fallbackStep)
+
+const showTodayDoneMessage = computed(() => !editingId.value && todayEntry.value?.confirmed === true)
+
+function getStepValue(step: Step): string | number {
+  if (step.key === 'km_driven') return form.value.km_driven
+  if (step.key === 'packages_delivered') return form.value.packages_delivered
+  if (step.key === 'hours_worked') return form.value.hours_worked
+  if (step.key === 'note') return form.value.note
+  return form.value.extra_fields[step.key] ?? ''
+}
+
+function hasStepValue(step: Step): boolean {
+  return String(getStepValue(step)).trim() !== ''
+}
+
+function stepDisplayValue(step: Step): string {
+  if (skippedFields.value.has(step.key)) return 'doplní se později'
+  const value = getStepValue(step)
+  return value !== '' && value !== undefined ? String(value) : '—'
+}
+
+async function findMyEntryForDate(dateStr: string): Promise<Entry | null> {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const params = new URLSearchParams({ year: String(y), month: String(m), day: String(d) })
+  if (user.value) params.set('user_id', String(user.value.id))
+  const result = await api.get<Entry[]>(`/performance?${params}`)
+  return result.find((en) => en.user_id === user.value?.id) ?? null
+}
+
+function resumeEntry(entry: Entry) {
+  resuming.value = true
+  editingId.value = entry.id
+  form.value = {
+    route_id: entry.route_id,
+    date: entry.date,
+    km_driven: entry.km_driven,
+    packages_delivered: entry.packages_delivered,
+    hours_worked: entry.hours_worked,
+    note: entry.note || '',
+    confirmed: entry.confirmed,
+    extra_fields: { ...entry.extra_fields } as Record<string, string>,
+  }
+  wizardActive.value = true
+  currentStep.value = 0
+  skippedFields.value = new Set(entry.skipped_fields)
+  resumeSteps.value = steps.value.filter((s) => entry.skipped_fields.includes(s.key))
+  formError.value = ''
+}
+
+async function checkTodayEntry() {
+  const todayIso = new Date().toISOString().slice(0, 10)
+  todayEntry.value = await findMyEntryForDate(todayIso)
+  if (todayEntry.value && !todayEntry.value.confirmed) {
+    resumeEntry(todayEntry.value)
+  }
+}
+
+async function startWizard() {
+  if (!form.value.route_id) {
+    formError.value = 'Vyber trasu'
+    return
+  }
+  formError.value = ''
+  const existing = await findMyEntryForDate(form.value.date)
+  if (existing) {
+    if (existing.confirmed) {
+      const routeName = routes.value.find((r) => r.id === existing.route_id)?.name
+      formError.value = `Na tento den už máš hotový formulář (trasa ${routeName}).`
+      return
+    }
+    resumeEntry(existing)
+    return
+  }
+  wizardActive.value = true
+  currentStep.value = 0
+  skippedFields.value = new Set()
+  resumeSteps.value = null
+}
+
+function exitWizard() {
+  if (resuming.value) editingId.value = null
+  wizardActive.value = false
+  currentStep.value = 0
+  skippedFields.value = new Set()
+  resumeSteps.value = null
+  resuming.value = false
+}
+
+function nextStep(skip: boolean) {
+  const step = activeWizardSteps.value[currentStep.value]
+  if (!step) return
+  if (skip) skippedFields.value.add(step.key)
+  else skippedFields.value.delete(step.key)
+  currentStep.value++
+}
+
+function prevStep() {
+  if (currentStep.value > 0) currentStep.value--
+}
+
+function jumpToStep(i: number) {
+  currentStep.value = i
+}
+
 const disputes = ref<Dispute[]>([])
 const resolveRouteByDispute = ref<Record<number, number | null>>({})
 const disputeActionError = ref<Record<number, string>>({})
@@ -202,6 +341,8 @@ function refreshFiltered() {
 }
 
 function startEdit(e: Entry) {
+  exitWizard()
+  resuming.value = false
   editingId.value = e.id
   form.value = {
     route_id: e.route_id,
@@ -221,28 +362,30 @@ function cancelEdit() {
   editingId.value = null
   form.value = emptyForm()
   formError.value = ''
+  exitWizard()
 }
 
-async function submit() {
+async function submit(): Promise<boolean> {
   formError.value = ''
   conflict.value = null
   disputeSuccess.value = ''
   if (!form.value.route_id) {
     formError.value = 'Vyber trasu'
-    return
+    return false
   }
   submitting.value = true
+  const isFlatEdit = editingId.value && !resuming.value
+  const payload = isFlatEdit ? form.value : { ...form.value, skipped_fields: [...skippedFields.value] }
   try {
     if (editingId.value) {
-      await api.patch(`/performance/${editingId.value}`, form.value)
+      await api.patch(`/performance/${editingId.value}`, payload)
       cancelEdit()
     } else {
-      await api.post('/performance', form.value)
-      form.value.note = ''
-      form.value.confirmed = false
-      form.value.extra_fields = {}
+      await api.post('/performance', payload)
+      form.value = emptyForm()
     }
     await loadEntries()
+    return true
   } catch (e) {
     const status = (e as { status?: number }).status
     const detail = (e as { detail?: { message: string; conflicting_entry_id: number; is_mine: boolean } }).detail
@@ -263,8 +406,25 @@ async function submit() {
     } else {
       formError.value = message
     }
+    return false
   } finally {
     submitting.value = false
+  }
+}
+
+async function finalizeSubmit() {
+  const ok = await submit()
+  if (ok || conflict.value) {
+    exitWizard()
+    await checkTodayEntry()
+  }
+}
+
+function onFormSubmit() {
+  if (editingId.value && !resuming.value) {
+    submit()
+  } else if (wizardActive.value && currentStep.value >= activeWizardSteps.value.length) {
+    finalizeSubmit()
   }
 }
 
@@ -361,6 +521,7 @@ onMounted(async () => {
   await Promise.all([loadRoutes(), loadFields(), loadUsers(), loadDisputes()])
   await loadEntries()
   await loadAverages()
+  await checkTodayEntry()
 })
 </script>
 
@@ -368,16 +529,25 @@ onMounted(async () => {
   <div>
     <h1><span class="eyebrow">Denní výkon</span>Formulář na denní výkon</h1>
 
-    <div class="card">
-      <h3 style="margin-top:0">{{ editingId ? 'Upravit záznam' : 'Nový záznam' }}</h3>
-      <p v-if="editingId" style="font-size:12px;color:var(--muted);margin-top:-8px">
+    <div class="card" v-if="showTodayDoneMessage">
+      <h3 style="margin-top:0">Dnešní formulář</h3>
+      <p style="margin:0">
+        Dnes už jsi vyplnil formulář na trasu
+        <strong>{{ routes.find(r => r.id === todayEntry!.route_id)?.name }}</strong>.
+        Případnou úpravu uděláš v tabulce záznamů níže.
+      </p>
+    </div>
+
+    <div class="card" v-else>
+      <h3 style="margin-top:0">{{ editingId && !resuming ? 'Upravit záznam' : 'Nový záznam' }}</h3>
+      <p v-if="editingId && !resuming" style="font-size:12px;color:var(--muted);margin-top:-8px">
         Upravuješ existující záznam. Pokud ho upravíš jiný den, než na který je, uvidí to admin v přehledu.
       </p>
-      <form @submit.prevent="submit">
+      <form @submit.prevent="onFormSubmit">
         <div class="form-row">
           <div class="field">
             <label>Trasa</label>
-            <select v-model.number="form.route_id" required>
+            <select v-model.number="form.route_id" required :disabled="wizardActive">
               <option :value="null" disabled>Vyber trasu</option>
               <option v-for="r in (editingId ? routes : myRoutes)" :key="r.id" :value="r.id">{{ r.name }}</option>
             </select>
@@ -387,52 +557,133 @@ onMounted(async () => {
           </div>
           <div class="field">
             <label>Datum</label>
-            <input v-model="form.date" type="date" required />
+            <input v-model="form.date" type="date" required :disabled="wizardActive" />
           </div>
         </div>
-        <div class="form-row">
-          <div class="field">
-            <label>Kilometry</label>
-            <input v-model.number="form.km_driven" type="number" step="0.1" />
+
+        <!-- Úprava existujícího záznamu: klasický plochý formulář -->
+        <template v-if="editingId && !resuming">
+          <div class="form-row">
+            <div class="field">
+              <label>Kilometry</label>
+              <input v-model.number="form.km_driven" type="number" step="0.1" />
+            </div>
+            <div class="field">
+              <label>Počet zásilek</label>
+              <input v-model.number="form.packages_delivered" type="number" />
+            </div>
           </div>
-          <div class="field">
-            <label>Počet zásilek</label>
-            <input v-model.number="form.packages_delivered" type="number" />
+          <div class="form-row">
+            <div class="field">
+              <label>Odpracované hodiny</label>
+              <input v-model.number="form.hours_worked" type="number" step="0.1" />
+            </div>
+            <div class="field">
+              <label>Poznámka</label>
+              <input v-model="form.note" />
+            </div>
           </div>
-        </div>
-        <div class="form-row">
-          <div class="field">
-            <label>Odpracované hodiny</label>
-            <input v-model.number="form.hours_worked" type="number" step="0.1" />
+          <div class="form-row" v-if="activeFields.length">
+            <div class="field" v-for="f in activeFields" :key="f.id">
+              <label>{{ f.label }}<span v-if="f.required"> *</span></label>
+              <input
+                v-model="form.extra_fields[f.key]"
+                :type="f.field_type === 'number' ? 'number' : 'text'"
+                :required="f.required"
+              />
+            </div>
           </div>
-          <div class="field">
-            <label>Poznámka</label>
-            <input v-model="form.note" />
+          <button class="btn" type="submit" :disabled="submitting">
+            {{ submitting ? 'Ukládám…' : 'Uložit úpravu' }}
+          </button>
+          <button type="button" class="btn secondary" style="margin-left:8px" @click="cancelEdit">
+            Zrušit úpravu
+          </button>
+        </template>
+
+        <!-- Nový záznam: postupné krokování polí místo ručního checkboxu -->
+        <template v-else>
+          <div v-if="!wizardActive">
+            <button type="button" class="btn" @click="startWizard">Pokračovat k vyplnění formuláře</button>
           </div>
-        </div>
-        <div class="form-row" v-if="activeFields.length">
-          <div class="field" v-for="f in activeFields" :key="f.id">
-            <label>{{ f.label }}<span v-if="f.required"> *</span></label>
+
+          <div v-else-if="currentStep < activeWizardSteps.length" class="field" style="border-top:1px solid var(--border);padding-top:14px">
+            <p style="font-size:12px;color:var(--muted);margin:0 0 8px">
+              Krok {{ currentStep + 1 }} / {{ activeWizardSteps.length }}
+            </p>
+            <label>{{ currentStepDef.label }}<span v-if="currentStepDef.required"> *</span></label>
             <input
-              v-model="form.extra_fields[f.key]"
-              :type="f.field_type === 'number' ? 'number' : 'text'"
-              :required="f.required"
+              v-if="currentStepDef.key === 'km_driven'"
+              v-model.number="form.km_driven"
+              type="number"
+              step="0.1"
             />
+            <input
+              v-else-if="currentStepDef.key === 'packages_delivered'"
+              v-model.number="form.packages_delivered"
+              type="number"
+            />
+            <input
+              v-else-if="currentStepDef.key === 'hours_worked'"
+              v-model.number="form.hours_worked"
+              type="number"
+              step="0.1"
+            />
+            <input v-else-if="currentStepDef.key === 'note'" v-model="form.note" />
+            <input
+              v-else
+              v-model="form.extra_fields[currentStepDef.key]"
+              :type="currentStepDef.field_type === 'number' ? 'number' : 'text'"
+            />
+            <p v-if="currentStepDef.required && !hasStepValue(currentStepDef)" style="font-size:12px;color:var(--muted);margin:6px 0 0">
+              Toto pole je povinné, musíš ho vyplnit.
+            </p>
+            <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+              <button
+                type="button"
+                class="btn"
+                :disabled="currentStepDef.required && !hasStepValue(currentStepDef)"
+                @click="nextStep(false)"
+              >
+                Pokračovat
+              </button>
+              <button
+                v-if="!currentStepDef.required"
+                type="button"
+                class="btn secondary"
+                @click="nextStep(true)"
+              >
+                Vyplnit později
+              </button>
+              <button v-if="currentStep > 0" type="button" class="btn secondary" @click="prevStep">Zpět</button>
+              <button v-if="!resuming" type="button" class="btn secondary" @click="exitWizard">Zrušit</button>
+            </div>
           </div>
-        </div>
-        <div class="field" style="display:flex;align-items:center;gap:8px">
-          <input id="confirmed" type="checkbox" v-model="form.confirmed" style="width:auto" />
-          <label for="confirmed" style="margin:0">Formulář je kompletně vyplněný</label>
-        </div>
-        <p style="font-size:12px;color:var(--muted);margin-top:-8px">
-          Pokud checkbox neodškrtneš, Mirkovi přijde upozornění.
-        </p>
-        <button class="btn" type="submit" :disabled="submitting">
-          {{ submitting ? 'Ukládám…' : editingId ? 'Uložit úpravu' : 'Uložit záznam' }}
-        </button>
-        <button v-if="editingId" type="button" class="btn secondary" style="margin-left:8px" @click="cancelEdit">
-          Zrušit úpravu
-        </button>
+
+          <div v-else class="field" style="border-top:1px solid var(--border);padding-top:14px">
+            <p style="font-weight:600;margin:0 0 8px">Shrnutí před uložením</p>
+            <ul style="list-style:none;margin:0 0 10px;padding:0;font-size:14px">
+              <li
+                v-for="(s, i) in activeWizardSteps"
+                :key="s.key"
+                style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--border)"
+              >
+                <span>{{ s.label }}: <strong>{{ stepDisplayValue(s) }}</strong></span>
+                <button type="button" class="btn secondary" @click="jumpToStep(i)">Upravit</button>
+              </li>
+            </ul>
+            <p v-if="skippedFields.size" style="font-size:12px;color:var(--muted);margin:0 0 10px">
+              Něco jsi nechal na později - formulář se uloží jako nekompletní a adminovi přijde upozornění.
+            </p>
+            <button class="btn" type="submit" :disabled="submitting">
+              {{ submitting ? 'Ukládám…' : 'Uložit záznam' }}
+            </button>
+            <button v-if="!resuming" type="button" class="btn secondary" style="margin-left:8px" @click="exitWizard">
+              Zrušit
+            </button>
+          </div>
+        </template>
+
         <p v-if="formError" class="error">{{ formError }}</p>
       </form>
 

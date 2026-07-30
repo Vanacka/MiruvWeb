@@ -129,8 +129,10 @@ class PerformanceEntryCreate(BaseModel):
     packages_delivered: int = 0
     hours_worked: float = 0
     note: Optional[str] = None
-    confirmed: bool = False
     extra_fields: dict[str, Any] = {}
+    # None = nezadáno (u ručních oprav přes plochý formulář se stav vyplnění nemění).
+    # Explicitní seznam (i prázdný) = "confirmed" se dopočítá z toho, jestli je prázdný.
+    skipped_fields: Optional[list[str]] = None
 
 
 class PerformanceEntryOut(BaseModel):
@@ -145,6 +147,7 @@ class PerformanceEntryOut(BaseModel):
     note: Optional[str]
     confirmed: bool
     extra_fields: dict[str, Any]
+    skipped_fields: list[str]
     updated_at: datetime
     updated_by_id: Optional[int]
     is_weekend: bool

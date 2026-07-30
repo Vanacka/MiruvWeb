@@ -118,7 +118,10 @@ class PerformanceEntry(Base):
     # klíčované podle PerformanceFieldDefinition.key.
     extra_fields = Column(JSON, default=dict)
 
-    # Checkbox potvrzení vyplnění kurýrem
+    # Klíče položek, které kurýr ve wizardu nechal "vyplnit později".
+    skipped_fields = Column(JSON, default=list)
+
+    # Odvozeno ze skipped_fields (prázdné = kompletně vyplněno) - nenastavuje se ručně.
     confirmed = Column(Boolean, default=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)

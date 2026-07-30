@@ -97,7 +97,7 @@ onMounted(load)
                 {{
                   checklist.form_filled
                     ? 'Dnes už vyplněno'
-                    : 'Odškrtne se samo po odeslání formuláře výkonu'
+                    : 'Odškrtne se, až formulář výkonu vyplníš celý bez přeskočení'
                 }}
               </span>
             </span>

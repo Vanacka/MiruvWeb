@@ -27,6 +27,7 @@ const form = ref({
   role: 'courier' as 'admin' | 'courier',
   vacation_days_limit: 20,
 })
+const newUserRouteIds = ref<number[]>([])
 const submitting = ref(false)
 const error = ref('')
 const success = ref('')
@@ -40,14 +41,24 @@ async function load() {
   routes.value = await api.get<Route[]>('/performance/routes')
 }
 
+function toggleNewUserRoute(routeId: number) {
+  const idx = newUserRouteIds.value.indexOf(routeId)
+  if (idx === -1) newUserRouteIds.value.push(routeId)
+  else newUserRouteIds.value.splice(idx, 1)
+}
+
 async function submit() {
   error.value = ''
   success.value = ''
   submitting.value = true
   try {
-    await api.post('/auth/users', form.value)
+    const created = await api.post<User>('/auth/users', form.value)
+    if (form.value.role === 'courier' && newUserRouteIds.value.length) {
+      await api.put(`/performance/routes/assignments/${created.id}`, { route_ids: newUserRouteIds.value })
+    }
     success.value = `Účet pro ${form.value.full_name} byl vytvořen.`
     form.value = { username: '', password: '', full_name: '', role: 'courier', vacation_days_limit: 20 }
+    newUserRouteIds.value = []
     await load()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Nepodařilo se založit účet'
@@ -132,6 +143,27 @@ onMounted(load)
             <option value="courier">Kurýr</option>
             <option value="admin">Admin</option>
           </select>
+        </div>
+        <div class="field" v-if="form.role === 'courier'">
+          <label>Preferované trasy</label>
+          <p v-if="!routes.length" style="font-size:13px;color:var(--muted);margin:0">
+            Zatím nejsou založené žádné trasy - založ je níže. Bez výběru smí kurýr zatím na všechny.
+          </p>
+          <div v-else style="display:flex;flex-wrap:wrap;gap:12px">
+            <label
+              v-for="r in routes"
+              :key="r.id"
+              style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:14px;width:auto;margin:0"
+            >
+              <input
+                type="checkbox"
+                style="width:auto"
+                :checked="newUserRouteIds.includes(r.id)"
+                @change="toggleNewUserRoute(r.id)"
+              />
+              {{ r.name }}
+            </label>
+          </div>
         </div>
         <button class="btn" type="submit" :disabled="submitting">
           {{ submitting ? 'Zakládám…' : 'Založit účet' }}

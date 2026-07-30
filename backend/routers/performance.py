@@ -24,9 +24,10 @@ from schemas import (
 from holidays import is_czech_state_holiday
 
 # Sledovaná pole při úpravě záznamu - u těchto se do logu ukládá stará/nová hodnota.
+# "skipped_fields" (a z něj odvozené "confirmed") se řeší zvlášť, viz update_entry.
 _TRACKED_FIELDS = [
     "route_id", "date", "km_driven", "packages_delivered",
-    "hours_worked", "note", "confirmed", "extra_fields",
+    "hours_worked", "note", "extra_fields",
 ]
 
 
@@ -81,6 +82,7 @@ def _entry_to_out(entry: PerformanceEntry) -> PerformanceEntryOut:
         note=entry.note,
         confirmed=entry.confirmed,
         extra_fields=entry.extra_fields or {},
+        skipped_fields=entry.skipped_fields or [],
         updated_at=entry.updated_at,
         updated_by_id=entry.updated_by_id,
         is_weekend=entry.date.weekday() >= 5,
@@ -240,21 +242,28 @@ def create_entry(
     _assert_route_allowed(current_user, payload.route_id)
     _validate_extra_fields(db, payload.extra_fields)
 
+    # Kurýr smí mít na jeden den jen jeden rozpracovaný/hotový záznam (bez ohledu na trasu) -
+    # jakmile na něco začal odpovídat, nesmí si "omylem" založit další na jinou trasu.
+    own_entry_today = db.query(PerformanceEntry).filter(
+        PerformanceEntry.user_id == current_user.id, PerformanceEntry.date == payload.date,
+    ).first()
+    if own_entry_today:
+        raise HTTPException(400, (
+            f"Na {payload.date.isoformat()} už máš rozpracovaný nebo hotový formulář "
+            f"(trasa {own_entry_today.route.name}) - dokonči nebo uprav ten."
+        ))
+
     conflicting = db.query(PerformanceEntry).filter(
         PerformanceEntry.route_id == payload.route_id, PerformanceEntry.date == payload.date,
     ).first()
     if conflicting:
-        is_mine = conflicting.user_id == current_user.id
         raise HTTPException(409, detail={
-            "message": (
-                "Pro tuto trasu a den už máš záznam - uprav ho."
-                if is_mine else
-                f"Tuto trasu na {payload.date.isoformat()} už vyplnil {conflicting.user.full_name}."
-            ),
+            "message": f"Tuto trasu na {payload.date.isoformat()} už vyplnil {conflicting.user.full_name}.",
             "conflicting_entry_id": conflicting.id,
-            "is_mine": is_mine,
+            "is_mine": False,
         })
 
+    skipped = payload.skipped_fields or []
     entry = PerformanceEntry(
         user_id=current_user.id,
         route_id=payload.route_id,
@@ -263,21 +272,22 @@ def create_entry(
         packages_delivered=payload.packages_delivered,
         hours_worked=payload.hours_worked,
         note=payload.note,
-        confirmed=payload.confirmed,
         extra_fields=payload.extra_fields,
+        skipped_fields=skipped,
+        confirmed=not skipped,
         updated_by_id=current_user.id,
     )
     db.add(entry)
     db.commit()
     db.refresh(entry)
 
-    # Pokud kurýr nezaškrtl potvrzovací checkbox, upozorni Mirka
-    if not payload.confirmed:
+    # Pokud něco zůstalo nevyplněné, upozorni adminy
+    if skipped:
         admins = db.query(User).filter(User.role == UserRole.admin).all()
         for admin in admins:
             db.add(Notification(
                 recipient_id=admin.id,
-                message=f"{current_user.full_name} neodškrtl formulář výkonu za {payload.date}",
+                message=f"{current_user.full_name} nedokončil formulář výkonu za {payload.date}",
             ))
         db.commit()
 
@@ -301,6 +311,13 @@ def update_entry(
     _validate_extra_fields(db, payload.extra_fields)
     if payload.route_id != entry.route_id or payload.date != entry.date:
         _assert_route_date_free(db, payload.route_id, payload.date, exclude_entry_id=entry.id)
+        if payload.date != entry.date:
+            own_clash = db.query(PerformanceEntry).filter(
+                PerformanceEntry.user_id == entry.user_id, PerformanceEntry.date == payload.date,
+                PerformanceEntry.id != entry.id,
+            ).first()
+            if own_clash:
+                raise HTTPException(400, "Na tento den už máš jiný záznam.")
 
     changes = {}
     for field in _TRACKED_FIELDS:
@@ -309,9 +326,19 @@ def update_entry(
         if old_value != new_value:
             changes[field] = {"old": _jsonable(old_value), "new": _jsonable(new_value)}
 
-    for field, value in payload.model_dump().items():
+    for field, value in payload.model_dump(exclude={"skipped_fields"}).items():
         setattr(entry, field, value)
     entry.updated_by_id = current_user.id
+
+    # skipped_fields (a z něj odvozené confirmed) se mění, jen když je explicitně poslané -
+    # ruční oprava přes plochý formulář ho neposílá a stav vyplnění tak zůstává nedotčený.
+    if payload.skipped_fields is not None:
+        if payload.skipped_fields != (entry.skipped_fields or []):
+            changes["skipped_fields"] = {
+                "old": entry.skipped_fields or [], "new": payload.skipped_fields,
+            }
+        entry.skipped_fields = payload.skipped_fields
+        entry.confirmed = not payload.skipped_fields
 
     if changes:
         db.add(PerformanceEntryEdit(
