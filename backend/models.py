@@ -176,6 +176,7 @@ class PerformanceEntryDispute(Base):
     proposed_note = Column(Text, nullable=True)
     proposed_confirmed = Column(Boolean, default=False)
     proposed_extra_fields = Column(JSON, default=dict)
+    proposed_skipped_fields = Column(JSON, default=list)
 
     status = Column(Enum(DisputeStatus), default=DisputeStatus.pending, nullable=False)
     # Trasa, na kterou admin při schválení přesune původní (chybný) záznam

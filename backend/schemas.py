@@ -173,6 +173,7 @@ class DisputeCreate(BaseModel):
     note: Optional[str] = None
     confirmed: bool = False
     extra_fields: dict[str, Any] = {}
+    skipped_fields: list[str] = []
 
 
 class DisputeResolve(BaseModel):
@@ -193,6 +194,7 @@ class PerformanceEntryDisputeOut(BaseModel):
     proposed_note: Optional[str]
     proposed_confirmed: bool
     proposed_extra_fields: dict[str, Any]
+    proposed_skipped_fields: list[str]
     conflicting_entry: PerformanceEntryOut
     conflicting_entry_owner_name: str
     corrected_route_id: Optional[int]

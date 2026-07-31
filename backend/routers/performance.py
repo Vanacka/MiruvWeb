@@ -108,6 +108,7 @@ def _dispute_to_out(dispute: PerformanceEntryDispute) -> PerformanceEntryDispute
         proposed_note=dispute.proposed_note,
         proposed_confirmed=dispute.proposed_confirmed,
         proposed_extra_fields=dispute.proposed_extra_fields or {},
+        proposed_skipped_fields=dispute.proposed_skipped_fields or [],
         conflicting_entry=_entry_to_out(conflicting),
         conflicting_entry_owner_name=conflicting.user.full_name,
         corrected_route_id=dispute.corrected_route_id,
@@ -144,12 +145,28 @@ def list_routes(db: Session = Depends(get_db), _: User = Depends(get_current_use
 
 
 @router.get("/routes/mine", response_model=list[RouteOut])
-def my_routes(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def my_routes(
+    date: Optional[date_type] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Trasy, které smí aktuální uživatel vyplňovat ve formuláři výkonu.
-    Bez přiřazení (ještě nenastaveno, nebo admin) vidí všechny."""
+    Bez přiřazení (ještě nenastaveno, nebo admin) vidí všechny.
+    Když je zadané datum, odfiltrují se trasy, na které už ten den někdo vyplnil
+    formulář - ať si dva lidi nezvolí omylem tu samou. Kdo o svoji (obsazenou)
+    trasu potřebuje nahlásit chybu, použije tlačítko "Nemohu vybrat svoji trasu",
+    které rovnou založí hlášení chyby (POST /disputes) na kteroukoliv trasu."""
     if current_user.role != UserRole.admin and current_user.preferred_routes:
-        return current_user.preferred_routes
-    return db.query(Route).all()
+        candidate_routes = list(current_user.preferred_routes)
+    else:
+        candidate_routes = db.query(Route).all()
+    if date is None:
+        return candidate_routes
+    taken_ids = {
+        r_id for (r_id,) in db.query(PerformanceEntry.route_id)
+        .filter(PerformanceEntry.date == date).all()
+    }
+    return [r for r in candidate_routes if r.id not in taken_ids]
 
 
 @router.get("/routes/assignments/{user_id}", response_model=list[RouteOut])
@@ -366,6 +383,16 @@ def list_entry_edits(entry_id: int, db: Session = Depends(get_db), _: User = Dep
 
 # ---------- Nahlášené chyby (kolize na trase/dni) ----------
 
+def _apply_dispute_payload(dispute: PerformanceEntryDispute, payload: DisputeCreate) -> None:
+    dispute.proposed_km_driven = payload.km_driven
+    dispute.proposed_packages_delivered = payload.packages_delivered
+    dispute.proposed_hours_worked = payload.hours_worked
+    dispute.proposed_note = payload.note
+    dispute.proposed_confirmed = payload.confirmed
+    dispute.proposed_extra_fields = payload.extra_fields
+    dispute.proposed_skipped_fields = payload.skipped_fields
+
+
 @router.post("/disputes", response_model=PerformanceEntryDisputeOut)
 def create_dispute(
     payload: DisputeCreate,
@@ -373,7 +400,9 @@ def create_dispute(
     current_user: User = Depends(get_current_user),
 ):
     """Kurýr nahlásí, že na tuto trasu/den už omylem vyplnil formulář někdo jiný.
-    Nic se nezapíše do performance_entries - jen se pošle admin(ům) ke schválení."""
+    Nic se nezapíše do performance_entries - jen se pošle admin(ům) ke schválení.
+    Pokud stejný kurýr na tutéž trasu/den už čekající hlášení má (typicky se vrací
+    doplnit rozpracovaný formulář), přepíše se jím - ať nemusí začínat od nuly."""
     conflicting = db.query(PerformanceEntry).filter(
         PerformanceEntry.route_id == payload.route_id, PerformanceEntry.date == payload.date,
     ).first()
@@ -388,20 +417,21 @@ def create_dispute(
         PerformanceEntryDispute.status == DisputeStatus.pending,
     ).first()
     if existing_dispute:
-        raise HTTPException(400, "Na tuto trasu a den už čeká nahlášená chyba na vyřízení.")
+        if existing_dispute.reported_by_id != current_user.id:
+            raise HTTPException(400, "Na tuto trasu a den už čeká nahlášená chyba na vyřízení.")
+        _apply_dispute_payload(existing_dispute, payload)
+        existing_dispute.conflicting_entry_id = conflicting.id
+        db.commit()
+        db.refresh(existing_dispute)
+        return _dispute_to_out(existing_dispute)
 
     dispute = PerformanceEntryDispute(
         route_id=payload.route_id,
         date=payload.date,
         conflicting_entry_id=conflicting.id,
         reported_by_id=current_user.id,
-        proposed_km_driven=payload.km_driven,
-        proposed_packages_delivered=payload.packages_delivered,
-        proposed_hours_worked=payload.hours_worked,
-        proposed_note=payload.note,
-        proposed_confirmed=payload.confirmed,
-        proposed_extra_fields=payload.extra_fields,
     )
+    _apply_dispute_payload(dispute, payload)
     db.add(dispute)
     db.commit()
     db.refresh(dispute)
@@ -417,6 +447,37 @@ def create_dispute(
         ))
     db.commit()
 
+    return _dispute_to_out(dispute)
+
+
+@router.get("/disputes/mine", response_model=list[PerformanceEntryDisputeOut])
+def my_disputes(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Vlastní nahlášené chyby - kurýr si tak může dohledat rozpracované/čekající
+    hlášení a pokračovat v jeho vyplňování, místo aby začínal znovu od nuly."""
+    disputes = db.query(PerformanceEntryDispute).filter(
+        PerformanceEntryDispute.reported_by_id == current_user.id,
+    ).order_by(PerformanceEntryDispute.created_at.desc()).all()
+    return [_dispute_to_out(d) for d in disputes]
+
+
+@router.patch("/disputes/{dispute_id}", response_model=PerformanceEntryDisputeOut)
+def update_dispute(
+    dispute_id: int,
+    payload: DisputeCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Kurýr doplní/opraví svoje dřív podané (a zatím nevyřízené) hlášení chyby."""
+    dispute = db.query(PerformanceEntryDispute).filter(PerformanceEntryDispute.id == dispute_id).first()
+    if not dispute:
+        raise HTTPException(404, "Spor nenalezen")
+    if dispute.reported_by_id != current_user.id:
+        raise HTTPException(403, "Nemáš oprávnění upravit toto hlášení")
+    if dispute.status != DisputeStatus.pending:
+        raise HTTPException(400, "Tento spor už byl vyřízen, nejde upravit")
+    _apply_dispute_payload(dispute, payload)
+    db.commit()
+    db.refresh(dispute)
     return _dispute_to_out(dispute)
 
 
@@ -461,6 +522,7 @@ def approve_dispute(
         conflicting.route_id = payload.corrected_route_id
         conflicting.updated_by_id = current_user.id
 
+    proposed_skipped = dispute.proposed_skipped_fields or []
     new_entry = PerformanceEntry(
         user_id=dispute.reported_by_id,
         route_id=dispute.route_id,
@@ -469,8 +531,12 @@ def approve_dispute(
         packages_delivered=dispute.proposed_packages_delivered,
         hours_worked=dispute.proposed_hours_worked,
         note=dispute.proposed_note,
-        confirmed=dispute.proposed_confirmed,
+        # "confirmed" se odvozuje ze skipped_fields stejně jako u běžného vyplnění
+        # (viz create_entry) - proposed_confirmed z hlášení chyby se ignoruje, ať
+        # oba stavy nemůžou být nekonzistentní.
+        confirmed=not proposed_skipped,
         extra_fields=dispute.proposed_extra_fields or {},
+        skipped_fields=proposed_skipped,
         updated_by_id=dispute.reported_by_id,
     )
     db.add(new_entry)

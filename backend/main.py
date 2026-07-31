@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from sqlalchemy import inspect, text
+
 from database import Base, engine, SessionLocal
 from models import User, UserRole
 from auth import hash_password
@@ -19,6 +21,20 @@ from routers import checklist as checklist_router
 from routers.checklist import run_daily_incomplete_check
 
 Base.metadata.create_all(bind=engine)
+
+# create_all jen zakládá chybějící tabulky, ne chybějící sloupce v existujících -
+# u SQLite bez Alembicu tak nové sloupce přidáváme ručně, ať se nemusí mazat app.db.
+def _ensure_columns() -> None:
+    inspector = inspect(engine)
+    existing = {c["name"] for c in inspector.get_columns("performance_entry_disputes")}
+    if "proposed_skipped_fields" not in existing:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE performance_entry_disputes ADD COLUMN proposed_skipped_fields JSON"
+            ))
+
+
+_ensure_columns()
 
 app = FastAPI(title="MiruvWeb API")
 

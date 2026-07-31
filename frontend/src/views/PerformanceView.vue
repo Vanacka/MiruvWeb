@@ -66,6 +66,7 @@ interface Dispute {
   proposed_note: string | null
   proposed_confirmed: boolean
   proposed_extra_fields: Record<string, string | number>
+  proposed_skipped_fields: string[]
   conflicting_entry: Entry
   conflicting_entry_owner_name: string
   corrected_route_id: number | null
@@ -129,7 +130,6 @@ const formError = ref('')
 const editingId = ref<number | null>(null)
 const conflict = ref<{ message: string; conflictingEntryId: number } | null>(null)
 const disputeSubmitting = ref(false)
-const disputeSuccess = ref('')
 
 // Krokovací "vyplnění formuláře" místo ručního checkboxu - kurýr projde každou
 // položku a buď ji vyplní, nebo řekne "vyplním později". Jen pokud nic
@@ -144,6 +144,18 @@ const skippedFields = ref<Set<string>>(new Set())
 const resuming = ref(false)
 const resumeSteps = ref<Step[] | null>(null)
 const todayEntry = ref<Entry | null>(null)
+
+// Nahlášená chyba na dnešek počítá jako "za dnešek už je hotovo" stejně jako
+// vyplněný záznam - dokud ji admin nevyřídí, nemá smysl znovu nabízet tlačítka
+// pro vyplnění/nahlášení, jako by se nic nestalo.
+const todayDispute = ref<Dispute | null>(null)
+
+// Když kurýr rozjede wizard nad hlášením chyby (jeho vlastní pending dispute),
+// odesílá se přes PATCH na dispute, ne přes POST na nový záznam.
+const resumingDispute = ref<number | null>(null)
+
+const reportMode = ref(false)
+const reportRouteId = ref<number | null>(null)
 
 const steps = computed<Step[]>(() => [
   { key: 'km_driven', label: 'Kilometry', required: false, field_type: 'number' },
@@ -160,7 +172,9 @@ const activeWizardSteps = computed<Step[]>(() => resumeSteps.value ?? steps.valu
 const fallbackStep: Step = { key: '', label: '', required: false, field_type: 'text' }
 const currentStepDef = computed<Step>(() => activeWizardSteps.value[currentStep.value] ?? fallbackStep)
 
-const showTodayDoneMessage = computed(() => !editingId.value && todayEntry.value?.confirmed === true)
+const showTodayDoneMessage = computed(() =>
+  !editingId.value && !resumingDispute.value && (todayEntry.value?.confirmed === true || !!todayDispute.value),
+)
 
 function getStepValue(step: Step): string | number {
   if (step.key === 'km_driven') return form.value.km_driven
@@ -208,11 +222,50 @@ function resumeEntry(entry: Entry) {
   formError.value = ''
 }
 
+// Rozpracované hlášení chyby (dispute) čeká na schválení, takže zatím
+// neexistuje žádný Entry k pokračování - draft se drží v samotném disputu.
+function resumeDispute(d: Dispute) {
+  resuming.value = true
+  resumingDispute.value = d.id
+  editingId.value = null
+  form.value = {
+    route_id: d.route_id,
+    date: d.date,
+    km_driven: d.proposed_km_driven,
+    packages_delivered: d.proposed_packages_delivered,
+    hours_worked: d.proposed_hours_worked,
+    note: d.proposed_note || '',
+    confirmed: d.proposed_confirmed,
+    extra_fields: { ...d.proposed_extra_fields } as Record<string, string>,
+  }
+  wizardActive.value = true
+  currentStep.value = 0
+  skippedFields.value = new Set(d.proposed_skipped_fields)
+  resumeSteps.value = steps.value.filter((s) => d.proposed_skipped_fields.includes(s.key))
+  formError.value = ''
+}
+
+async function findMyPendingDispute(dateStr: string): Promise<Dispute | null> {
+  const mine = await api.get<Dispute[]>('/performance/disputes/mine')
+  return mine.find((d) => d.date === dateStr && d.status === 'pending') ?? null
+}
+
 async function checkTodayEntry() {
   const todayIso = new Date().toISOString().slice(0, 10)
   todayEntry.value = await findMyEntryForDate(todayIso)
+  todayDispute.value = null
   if (todayEntry.value && !todayEntry.value.confirmed) {
     resumeEntry(todayEntry.value)
+    return
+  }
+  if (!todayEntry.value) {
+    const pendingDispute = await findMyPendingDispute(todayIso)
+    if (pendingDispute && pendingDispute.proposed_skipped_fields.length) {
+      // Ještě něco chybí vyplnit - rovnou do toho, žádné tlačítko navíc.
+      resumeDispute(pendingDispute)
+      return
+    }
+    todayDispute.value = pendingDispute
   }
 }
 
@@ -236,6 +289,7 @@ async function startWizard() {
   currentStep.value = 0
   skippedFields.value = new Set()
   resumeSteps.value = null
+  resumingDispute.value = null
 }
 
 function exitWizard() {
@@ -245,6 +299,7 @@ function exitWizard() {
   skippedFields.value = new Set()
   resumeSteps.value = null
   resuming.value = false
+  resumingDispute.value = null
 }
 
 function nextStep(skip: boolean) {
@@ -261,6 +316,45 @@ function prevStep() {
 
 function jumpToStep(i: number) {
   currentStep.value = i
+}
+
+// Únikový poklop pro případ, že vlastní trasu kurýr v nabídce nevidí, protože
+// ji (omylem) na ten den vyplnil někdo jiný. Jedna akce - vybere trasu, chyba se
+// rovnou nahlásí a hned se přepne do vyplňování, žádný mezikrok navíc.
+function openReportMode() {
+  reportMode.value = true
+  reportRouteId.value = null
+  formError.value = ''
+}
+
+async function submitReportRoute() {
+  if (!reportRouteId.value) return
+  formError.value = ''
+  disputeSubmitting.value = true
+  try {
+    // Pokud už na tuhle trasu/den čeká vlastní dřívější hlášení (typicky se sem
+    // kurýr vrátil znovu), pokračuje se v něm - jinak by se přepsalo prázdným.
+    const existing = await findMyPendingDispute(form.value.date)
+    const dispute = existing && existing.route_id === reportRouteId.value
+      ? existing
+      : await api.post<Dispute>('/performance/disputes', {
+          route_id: reportRouteId.value,
+          date: form.value.date,
+          km_driven: 0,
+          packages_delivered: 0,
+          hours_worked: 0,
+          note: null,
+          confirmed: false,
+          extra_fields: {},
+          skipped_fields: steps.value.map((s) => s.key),
+        })
+    reportMode.value = false
+    resumeDispute(dispute)
+  } catch (e) {
+    formError.value = e instanceof Error ? e.message : 'Nepodařilo se nahlásit chybu'
+  } finally {
+    disputeSubmitting.value = false
+  }
 }
 
 const disputes = ref<Dispute[]>([])
@@ -292,8 +386,19 @@ function formatChangeValue(field: string, value: unknown) {
 
 async function loadRoutes() {
   routes.value = await api.get<Route[]>('/performance/routes')
-  myRoutes.value = await api.get<Route[]>('/performance/routes/mine')
+  await loadMyRoutes()
 }
+
+// Trasy, které si kurýr smí vybrat pro NOVÝ záznam na form.value.date - obsazené
+// (na ten den už má formulář) trasy se sem záměrně nedostanou, viz "Nemohu vybrat
+// svoji trasu" níže pro případ, že je obsazená omylem.
+async function loadMyRoutes() {
+  myRoutes.value = await api.get<Route[]>(`/performance/routes/mine?date=${form.value.date}`)
+}
+
+watch(() => form.value.date, () => {
+  if (!wizardActive.value && !editingId.value) loadMyRoutes()
+})
 
 async function loadFields() {
   activeFields.value = await api.get<FieldDef[]>('/performance/fields/active')
@@ -368,7 +473,6 @@ function cancelEdit() {
 async function submit(): Promise<boolean> {
   formError.value = ''
   conflict.value = null
-  disputeSuccess.value = ''
   if (!form.value.route_id) {
     formError.value = 'Vyber trasu'
     return false
@@ -385,6 +489,7 @@ async function submit(): Promise<boolean> {
       form.value = emptyForm()
     }
     await loadEntries()
+    await loadMyRoutes()
     return true
   } catch (e) {
     const status = (e as { status?: number }).status
@@ -413,8 +518,17 @@ async function submit(): Promise<boolean> {
 }
 
 async function finalizeSubmit() {
+  // Doplňování rozpracovaného hlášení chyby (viz "Nemohu vybrat svoji trasu") se
+  // ukládá rovnou přes dispute PATCH - zkoušet normální POST /performance by tu
+  // jen znovu narazilo na tutéž kolizi a ukázalo zbytečné druhé tlačítko navíc.
+  if (resumingDispute.value) {
+    await submitDispute()
+    return
+  }
   const ok = await submit()
-  if (ok || conflict.value) {
+  // Při konfliktu (409 - trasu už vyplnil někdo jiný) wizard schválně NEresetujeme -
+  // ať se neztratí, co kurýr už vyplnil/přeskočil, než stihne nahlásit chybu.
+  if (ok) {
     exitWizard()
     await checkTodayEntry()
   }
@@ -432,11 +546,17 @@ async function submitDispute() {
   if (!form.value.route_id) return
   disputeSubmitting.value = true
   formError.value = ''
+  const payload = { ...form.value, skipped_fields: [...skippedFields.value] }
   try {
-    await api.post('/performance/disputes', form.value)
+    if (resumingDispute.value) {
+      await api.patch<Dispute>(`/performance/disputes/${resumingDispute.value}`, payload)
+    } else {
+      await api.post<Dispute>('/performance/disputes', payload)
+    }
     conflict.value = null
-    disputeSuccess.value = 'Nahlášeno adminovi, čeká na schválení. Nic se zatím neuložilo.'
+    exitWizard()
     form.value = emptyForm()
+    await checkTodayEntry()
   } catch (e) {
     formError.value = e instanceof Error ? e.message : 'Nepodařilo se nahlásit chybu'
   } finally {
@@ -531,29 +651,56 @@ onMounted(async () => {
 
     <div class="card" v-if="showTodayDoneMessage">
       <h3 style="margin-top:0">Dnešní formulář</h3>
-      <p style="margin:0">
+      <p v-if="todayEntry?.confirmed" style="margin:0">
         Dnes už jsi vyplnil formulář na trasu
         <strong>{{ routes.find(r => r.id === todayEntry!.route_id)?.name }}</strong>.
         Případnou úpravu uděláš v tabulce záznamů níže.
       </p>
+      <template v-else-if="todayDispute">
+        <p style="margin:0">
+          Dnes jsi nahlásil chybu na trase <strong>{{ todayDispute.route_name }}</strong> -
+          čeká na schválení adminem.
+        </p>
+      </template>
     </div>
 
     <div class="card" v-else>
-      <h3 style="margin-top:0">{{ editingId && !resuming ? 'Upravit záznam' : 'Nový záznam' }}</h3>
+      <h3 style="margin-top:0">
+        {{ resumingDispute ? 'Nahlášení chyby na trase' : editingId && !resuming ? 'Upravit záznam' : 'Nový záznam' }}
+      </h3>
+      <p v-if="resumingDispute" style="font-size:12px;color:var(--muted);margin-top:-8px">
+        Vyplňuješ, co ti patří na tuto trasu/den - admin to porovná s chybným záznamem a rozhodne o opravě.
+      </p>
       <p v-if="editingId && !resuming" style="font-size:12px;color:var(--muted);margin-top:-8px">
         Upravuješ existující záznam. Pokud ho upravíš jiný den, než na který je, uvidí to admin v přehledu.
       </p>
       <form @submit.prevent="onFormSubmit">
         <div class="form-row">
-          <div class="field">
+          <div class="field" v-if="!reportMode">
             <label>Trasa</label>
             <select v-model.number="form.route_id" required :disabled="wizardActive">
               <option :value="null" disabled>Vyber trasu</option>
-              <option v-for="r in (editingId ? routes : myRoutes)" :key="r.id" :value="r.id">{{ r.name }}</option>
+              <option v-for="r in (editingId || wizardActive ? routes : myRoutes)" :key="r.id" :value="r.id">{{ r.name }}</option>
             </select>
-            <p v-if="!editingId && !myRoutes.length" style="font-size: 12px; color: var(--muted); margin: 4px 0 0">
+            <p v-if="!editingId && !myRoutes.length && !routes.length" style="font-size: 12px; color: var(--muted); margin: 4px 0 0">
               Zatím nejsou založené žádné trasy.
             </p>
+            <p v-if="!editingId && !wizardActive" style="font-size:12px;margin:6px 0 0">
+              <button type="button" class="btn secondary" @click="openReportMode">Nemohu vybrat svoji trasu</button>
+            </p>
+          </div>
+          <div class="field" v-else>
+            <label>Na jakou trasu jsi měl/a dnes jet?</label>
+            <select v-model.number="reportRouteId">
+              <option :value="null" disabled>Vyber trasu</option>
+              <option v-for="r in routes" :key="r.id" :value="r.id">{{ r.name }}</option>
+            </select>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button type="button" class="btn" :disabled="!reportRouteId || disputeSubmitting" @click="submitReportRoute">
+                {{ disputeSubmitting ? 'Nahlašuji…' : 'Nahlásit a pokračovat' }}
+              </button>
+              <button type="button" class="btn secondary" @click="reportMode = false">Zpět</button>
+            </div>
           </div>
           <div class="field">
             <label>Datum</label>
@@ -601,8 +748,10 @@ onMounted(async () => {
           </button>
         </template>
 
-        <!-- Nový záznam: postupné krokování polí místo ručního checkboxu -->
-        <template v-else>
+        <!-- Nový záznam: postupné krokování polí místo ručního checkboxu.
+             V reportMode (výběr trasy k nahlášení) se schválně nevykresluje nic
+             z tohohle - jen picker + Datum výš, dokud se trasa nepotvrdí. -->
+        <template v-else-if="!reportMode">
           <div v-if="!wizardActive">
             <button type="button" class="btn" @click="startWizard">Pokračovat k vyplnění formuláře</button>
           </div>
@@ -675,8 +824,8 @@ onMounted(async () => {
             <p v-if="skippedFields.size" style="font-size:12px;color:var(--muted);margin:0 0 10px">
               Něco jsi nechal na později - formulář se uloží jako nekompletní a adminovi přijde upozornění.
             </p>
-            <button class="btn" type="submit" :disabled="submitting">
-              {{ submitting ? 'Ukládám…' : 'Uložit záznam' }}
+            <button class="btn" type="submit" :disabled="submitting || disputeSubmitting">
+              {{ (submitting || disputeSubmitting) ? 'Odesílám…' : resumingDispute ? 'Odeslat hlášení' : 'Uložit záznam' }}
             </button>
             <button v-if="!resuming" type="button" class="btn secondary" style="margin-left:8px" @click="exitWizard">
               Zrušit
@@ -696,7 +845,6 @@ onMounted(async () => {
           Zrušit
         </button>
       </div>
-      <p v-if="disputeSuccess" style="color:var(--green);font-size:13px;margin:10px 0 0">{{ disputeSuccess }}</p>
     </div>
 
     <div class="card" v-if="isAdmin && disputes.filter(d => d.status === 'pending').length">
