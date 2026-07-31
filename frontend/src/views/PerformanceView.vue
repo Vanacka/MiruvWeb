@@ -28,6 +28,7 @@ interface Entry {
   is_weekend: boolean
   is_holiday: boolean
   edit_count: number
+  is_late_creation: boolean
   is_late_edit: boolean
 }
 interface Average {
@@ -175,6 +176,10 @@ const currentStepDef = computed<Step>(() => activeWizardSteps.value[currentStep.
 const showTodayDoneMessage = computed(() =>
   !editingId.value && !resumingDispute.value && (todayEntry.value?.confirmed === true || !!todayDispute.value),
 )
+
+// Zpětně vyplňovaný formulář (jiný den než dnešek) nejde nechat nekompletní -
+// "vyplním později" u zpětného vyplnění nedává smysl, termín už stejně minul.
+const isBackfilling = computed(() => form.value.date !== new Date().toISOString().slice(0, 10))
 
 function getStepValue(step: Step): string | number {
   if (step.key === 'km_driven') return form.value.km_driven
@@ -800,20 +805,20 @@ onMounted(async () => {
               v-model="form.extra_fields[currentStepDef.key]"
               :type="currentStepDef.field_type === 'number' ? 'number' : 'text'"
             />
-            <p v-if="currentStepDef.required && !hasStepValue(currentStepDef)" style="font-size:12px;color:var(--muted);margin:6px 0 0">
-              Toto pole je povinné, musíš ho vyplnit.
+            <p v-if="(currentStepDef.required || isBackfilling) && !hasStepValue(currentStepDef)" style="font-size:12px;color:var(--muted);margin:6px 0 0">
+              {{ isBackfilling ? 'Zpětně vyplňovaný formulář nejde nechat neúplný, musíš ho vyplnit.' : 'Toto pole je povinné, musíš ho vyplnit.' }}
             </p>
             <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
               <button
                 type="button"
                 class="btn"
-                :disabled="currentStepDef.required && !hasStepValue(currentStepDef)"
+                :disabled="(currentStepDef.required || isBackfilling) && !hasStepValue(currentStepDef)"
                 @click="nextStep(false)"
               >
                 Pokračovat
               </button>
               <button
-                v-if="!currentStepDef.required"
+                v-if="!currentStepDef.required && !isBackfilling"
                 type="button"
                 class="btn secondary"
                 @click="nextStep(true)"
@@ -1043,7 +1048,7 @@ onMounted(async () => {
             <th>Trasa</th><th class="num">Km</th><th class="num">Zásilky</th>
             <th class="num">Hodiny</th>
             <th v-for="f in activeFields" :key="f.id" class="num">{{ f.label }}</th>
-            <th>Potvrzeno</th><th>Poznámka</th><th>Úpravy</th><th></th>
+            <th>Potvrzeno</th><th>Poznámka</th><th>Po termínu</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -1059,7 +1064,8 @@ onMounted(async () => {
               <td>{{ e.confirmed ? '✓' : '—' }}</td>
               <td>{{ e.note }}</td>
               <td>
-                <span v-if="e.is_late_edit" class="badge unpaid">upraveno po termínu</span>
+                <span v-if="e.is_late_creation" class="badge unpaid">vyplněno</span>
+                <span v-else-if="e.is_late_edit" class="badge unpaid">upraveno</span>
                 <span v-else-if="e.edit_count" class="badge paid">upraveno</span>
                 <span v-else style="color:var(--muted)">—</span>
               </td>

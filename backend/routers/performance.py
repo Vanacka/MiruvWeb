@@ -58,6 +58,15 @@ def _validate_extra_fields(db: Session, extra_fields: dict) -> None:
             raise HTTPException(400, f"Pole '{f.label}' je povinné")
 
 
+def _assert_no_skip_if_backdated(user: User, payload: PerformanceEntryCreate) -> None:
+    """Kurýr nesmí při zpětném vyplňování (jiný den než dnešek) nic nechat 'na
+    později' - termín už stejně minul. Admin smí i tak dělat zpětné opravy po částech."""
+    if user.role == UserRole.admin:
+        return
+    if payload.date != date_type.today() and payload.skipped_fields:
+        raise HTTPException(400, "Zpětně vyplňovaný formulář nejde uložit s nedokončenými položkami.")
+
+
 def _assert_route_date_free(db: Session, route_id: int, date: date_type, exclude_entry_id: Optional[int] = None) -> None:
     """Na danou trasu a den smí existovat jen jeden záznam výkonu."""
     q = db.query(PerformanceEntry).filter(
@@ -88,6 +97,7 @@ def _entry_to_out(entry: PerformanceEntry) -> PerformanceEntryOut:
         is_weekend=entry.date.weekday() >= 5,
         is_holiday=is_czech_state_holiday(entry.date),
         edit_count=len(edits),
+        is_late_creation=entry.created_at.date() > entry.date,
         is_late_edit=any(e.edited_at.date() > entry.date for e in edits),
     )
 
@@ -258,6 +268,7 @@ def create_entry(
 ):
     _assert_route_allowed(current_user, payload.route_id)
     _validate_extra_fields(db, payload.extra_fields)
+    _assert_no_skip_if_backdated(current_user, payload)
 
     # Kurýr smí mít na jeden den jen jeden rozpracovaný/hotový záznam (bez ohledu na trasu) -
     # jakmile na něco začal odpovídat, nesmí si "omylem" založit další na jinou trasu.
@@ -326,6 +337,7 @@ def update_entry(
         raise HTTPException(403, "Nemáš oprávnění upravit tento záznam")
     _assert_route_allowed(current_user, payload.route_id)
     _validate_extra_fields(db, payload.extra_fields)
+    _assert_no_skip_if_backdated(current_user, payload)
     if payload.route_id != entry.route_id or payload.date != entry.date:
         _assert_route_date_free(db, payload.route_id, payload.date, exclude_entry_id=entry.id)
         if payload.date != entry.date:

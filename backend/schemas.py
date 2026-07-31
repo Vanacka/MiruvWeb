@@ -153,6 +153,7 @@ class PerformanceEntryOut(BaseModel):
     is_weekend: bool
     is_holiday: bool
     edit_count: int
+    is_late_creation: bool  # založeno (zpětně vyplněno) v jiný den, než na který záznam je
     is_late_edit: bool  # aspoň jedna úprava proběhla v jiný den, než na který záznam je
 
 
