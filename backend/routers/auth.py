@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from auth import authenticate_user, create_access_token, get_current_user, require_admin, hash_password
 from models import User
-from schemas import Token, UserOut, UserCreate
+from schemas import Token, UserOut, UserCreate, UserActiveUpdate
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -17,6 +17,11 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Nesprávné jméno nebo heslo",
+        )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Tento účet byl deaktivován",
         )
     token = create_access_token({"sub": user.username})
     return Token(access_token=token)
@@ -48,3 +53,24 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db), _: User = De
 @router.get("/users", response_model=list[UserOut])
 def list_users(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     return db.query(User).all()
+
+
+@router.patch("/users/{user_id}/active", response_model=UserOut)
+def set_user_active(
+    user_id: int,
+    payload: UserActiveUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """"Smazání" účtu = deaktivace - přihlášení přestane fungovat a zmizí z výběru
+    pro nové akce, ale historie (nafta, dovolená, výkon, spory) zůstává zachovaná
+    a admin se k ní pořád dostane. Jde to i vrátit zpět."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(404, "Uživatel nenalezen")
+    if not payload.is_active and user.id == current_user.id:
+        raise HTTPException(400, "Nemůžeš deaktivovat sám sebe")
+    user.is_active = payload.is_active
+    db.commit()
+    db.refresh(user)
+    return user

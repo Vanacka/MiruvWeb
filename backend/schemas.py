@@ -25,6 +25,7 @@ class UserOut(BaseModel):
     full_name: str
     role: UserRole
     vacation_days_limit: int
+    is_active: bool
     preferred_routes: list[RouteOut] = []
 
 
@@ -38,6 +39,10 @@ class UserCreate(BaseModel):
     full_name: str
     role: UserRole = UserRole.courier
     vacation_days_limit: int = 20
+
+
+class UserActiveUpdate(BaseModel):
+    is_active: bool
 
 
 # ---------- Fuel ----------

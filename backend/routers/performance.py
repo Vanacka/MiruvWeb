@@ -154,6 +154,21 @@ def list_routes(db: Session = Depends(get_db), _: User = Depends(get_current_use
     return db.query(Route).all()
 
 
+@router.delete("/routes/{route_id}")
+def delete_route(route_id: int, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    """Trasu jde smazat, jen dokud na ni nikdy nikdo nevyplnil formulář výkonu -
+    jinak by se zbořila historie záznamů, co na ni odkazují."""
+    route = db.query(Route).filter(Route.id == route_id).first()
+    if not route:
+        raise HTTPException(404, "Trasa nenalezena")
+    if db.query(PerformanceEntry).filter(PerformanceEntry.route_id == route_id).first():
+        raise HTTPException(400, "Na tuto trasu už existují záznamy výkonu - nejdřív je smaž nebo přesuň.")
+    route.preferred_by = []
+    db.delete(route)
+    db.commit()
+    return {"ok": True}
+
+
 @router.get("/routes/mine", response_model=list[RouteOut])
 def my_routes(
     date: Optional[date_type] = None,

@@ -12,6 +12,7 @@ interface User {
   full_name: string
   role: 'admin' | 'courier'
   vacation_days_limit: number
+  is_active: boolean
   preferred_routes: Route[]
 }
 
@@ -19,6 +20,9 @@ const users = ref<User[]>([])
 const routes = ref<Route[]>([])
 const expandedUser = ref<number | null>(null)
 const savingUserId = ref<number | null>(null)
+const togglingActiveId = ref<number | null>(null)
+const deletingRouteId = ref<number | null>(null)
+const routeDeleteError = ref('')
 
 const form = ref({
   username: '',
@@ -79,6 +83,37 @@ async function submitRoute() {
     routeError.value = e instanceof Error ? e.message : 'Nepodařilo se založit trasu'
   } finally {
     routeSubmitting.value = false
+  }
+}
+
+async function deleteRoute(r: Route) {
+  routeDeleteError.value = ''
+  if (!window.confirm(`Opravdu smazat trasu "${r.name}"? Jde jen dokud na ni nikdy nikdo nevyplnil formulář.`)) return
+  deletingRouteId.value = r.id
+  try {
+    await api.delete(`/performance/routes/${r.id}`)
+    await load()
+  } catch (e) {
+    routeDeleteError.value = e instanceof Error ? e.message : 'Nepodařilo se smazat trasu'
+  } finally {
+    deletingRouteId.value = null
+  }
+}
+
+async function toggleUserActive(u: User) {
+  const goingInactive = u.is_active
+  const message = goingInactive
+    ? `Opravdu deaktivovat ${u.full_name}? Přihlášení přestane fungovat, ale historie (nafta, dovolená, výkon) zůstane zachovaná - jde to kdykoliv vrátit zpět.`
+    : `Znovu aktivovat ${u.full_name}?`
+  if (!window.confirm(message)) return
+  togglingActiveId.value = u.id
+  try {
+    const updated = await api.patch<User>(`/auth/users/${u.id}/active`, { is_active: !u.is_active })
+    u.is_active = updated.is_active
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Nepodařilo se změnit stav účtu'
+  } finally {
+    togglingActiveId.value = null
   }
 }
 
@@ -185,9 +220,21 @@ onMounted(load)
         </button>
       </form>
       <p v-if="routeError" class="error" style="margin-top:-8px">{{ routeError }}</p>
+      <p v-if="routeDeleteError" class="error" style="margin-top:-8px">{{ routeDeleteError }}</p>
       <p v-if="!routes.length" style="color:var(--muted);margin:0">Zatím nejsou založené žádné trasy.</p>
       <div v-else style="display:flex;flex-wrap:wrap;gap:8px">
-        <span v-for="r in routes" :key="r.id" class="badge paid">{{ r.name }}</span>
+        <span v-for="r in routes" :key="r.id" style="display:inline-flex;align-items:center;gap:6px">
+          <span class="badge paid">{{ r.name }}</span>
+          <button
+            type="button"
+            class="btn secondary"
+            style="padding:2px 8px;font-size:12px;color:var(--red)"
+            :disabled="deletingRouteId === r.id"
+            @click="deleteRoute(r)"
+          >
+            {{ deletingRouteId === r.id ? 'Mažu…' : 'Smazat' }}
+          </button>
+        </span>
       </div>
     </div>
 
@@ -198,7 +245,7 @@ onMounted(load)
       </p>
       <table>
         <thead>
-          <tr><th>Jméno</th><th>Login</th><th>Role</th><th class="num">Limit dovolené</th></tr>
+          <tr><th>Jméno</th><th>Login</th><th>Role</th><th class="num">Limit dovolené</th><th>Stav</th><th></th></tr>
         </thead>
         <tbody>
           <template v-for="u in users" :key="u.id">
@@ -210,9 +257,25 @@ onMounted(load)
               <td>{{ u.username }}</td>
               <td>{{ u.role === 'admin' ? 'admin' : 'kurýr' }}</td>
               <td class="num">{{ u.vacation_days_limit }}</td>
+              <td>
+                <span class="badge" :class="u.is_active ? 'paid' : 'unpaid'">
+                  {{ u.is_active ? 'aktivní' : 'neaktivní' }}
+                </span>
+              </td>
+              <td>
+                <button
+                  type="button"
+                  class="btn secondary"
+                  :style="u.is_active ? 'color:var(--red)' : ''"
+                  :disabled="togglingActiveId === u.id"
+                  @click.stop="toggleUserActive(u)"
+                >
+                  {{ togglingActiveId === u.id ? 'Ukládám…' : u.is_active ? 'Deaktivovat' : 'Aktivovat' }}
+                </button>
+              </td>
             </tr>
             <tr v-if="u.role === 'courier' && expandedUser === u.id">
-              <td colspan="4" style="background:var(--paper)">
+              <td colspan="6" style="background:var(--paper)">
                 <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
                   Preferované trasy pro {{ u.full_name }}
                 </div>
