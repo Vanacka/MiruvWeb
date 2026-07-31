@@ -377,6 +377,22 @@ function canEdit(e: Entry) {
   return isAdmin.value || e.user_id === user.value?.id
 }
 
+const deletingEntryId = ref<number | null>(null)
+
+async function deleteEntry(e: Entry) {
+  if (!window.confirm('Opravdu chceš tento záznam smazat? Nejde to vrátit zpět.')) return
+  deletingEntryId.value = e.id
+  try {
+    await api.delete(`/performance/${e.id}`)
+    await loadEntries()
+    await loadMyRoutes()
+  } catch (err) {
+    formError.value = err instanceof Error ? err.message : 'Nepodařilo se smazat záznam'
+  } finally {
+    deletingEntryId.value = null
+  }
+}
+
 function formatChangeValue(field: string, value: unknown) {
   if (field === 'route_id') return routes.value.find((r) => r.id === value)?.name ?? value
   if (field === 'confirmed') return value ? 'ano' : 'ne'
@@ -1056,6 +1072,15 @@ onMounted(async () => {
                   @click="toggleLog(e.id)"
                 >
                   {{ expandedLogId === e.id ? 'Skrýt log' : `Log (${e.edit_count})` }}
+                </button>
+                <button
+                  v-if="canEdit(e)"
+                  class="btn secondary"
+                  style="margin-left:6px;color:var(--red)"
+                  :disabled="deletingEntryId === e.id"
+                  @click="deleteEntry(e)"
+                >
+                  {{ deletingEntryId === e.id ? 'Mažu…' : 'Smazat' }}
                 </button>
               </td>
             </tr>

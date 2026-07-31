@@ -367,6 +367,31 @@ def update_entry(
     return _entry_to_out(entry)
 
 
+@router.delete("/{entry_id}")
+def delete_entry(
+    entry_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Kurýr smí smazat jen svůj vlastní záznam (z libovolného dne), admin kterýkoliv."""
+    entry = db.query(PerformanceEntry).filter(PerformanceEntry.id == entry_id).first()
+    if not entry:
+        raise HTTPException(404, "Záznam nenalezen")
+    if current_user.role != UserRole.admin and entry.user_id != current_user.id:
+        raise HTTPException(403, "Nemáš oprávnění smazat tento záznam")
+
+    linked_dispute = db.query(PerformanceEntryDispute).filter(
+        PerformanceEntryDispute.conflicting_entry_id == entry.id,
+    ).first()
+    if linked_dispute:
+        raise HTTPException(400, "Tento záznam je součástí nahlášené chyby - nejdřív ji vyřiď, pak půjde smazat.")
+
+    db.query(PerformanceEntryEdit).filter(PerformanceEntryEdit.entry_id == entry.id).delete()
+    db.delete(entry)
+    db.commit()
+    return {"ok": True}
+
+
 @router.get("/{entry_id}/edits", response_model=list[PerformanceEntryEditOut])
 def list_entry_edits(entry_id: int, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     entry = db.query(PerformanceEntry).filter(PerformanceEntry.id == entry_id).first()
