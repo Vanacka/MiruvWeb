@@ -26,8 +26,9 @@ from holidays import is_czech_state_holiday
 # Sledovaná pole při úpravě záznamu - u těchto se do logu ukládá stará/nová hodnota.
 # "skipped_fields" (a z něj odvozené "confirmed") se řeší zvlášť, viz update_entry.
 _TRACKED_FIELDS = [
-    "route_id", "date", "km_driven", "packages_delivered",
-    "hours_worked", "note", "extra_fields",
+    "route_id", "date", "pocet_hd", "pocet_boxy", "hd_psd_box",
+    "svoz_do_50", "svoz_do_100", "svoz_nad_100", "dobirky", "pocet_baliku",
+    "nedorucene", "km", "note", "extra_fields",
 ]
 
 
@@ -49,12 +50,15 @@ def _assert_route_allowed(user: User, route_id: int) -> None:
         raise HTTPException(403, "Tato trasa není mezi tvými přiřazenými trasami")
 
 
-def _validate_extra_fields(db: Session, extra_fields: dict) -> None:
+def _validate_required_fields(db: Session, payload: PerformanceEntryCreate) -> None:
+    """Kontroluje povinnost jak u vlastních polí (extra_fields), tak u vestavěných
+    sloupců (core=True) - obojí je teď spravované přes stejný PerformanceFieldDefinition."""
     active_fields = db.query(PerformanceFieldDefinition).filter(
         PerformanceFieldDefinition.active == True  # noqa: E712
     ).all()
     for f in active_fields:
-        if f.required and not str(extra_fields.get(f.key, "")).strip():
+        value = getattr(payload, f.key, None) if f.core else payload.extra_fields.get(f.key)
+        if f.required and not str(value if value is not None else "").strip():
             raise HTTPException(400, f"Pole '{f.label}' je povinné")
 
 
@@ -85,9 +89,16 @@ def _entry_to_out(entry: PerformanceEntry) -> PerformanceEntryOut:
         user_id=entry.user_id,
         route_id=entry.route_id,
         date=entry.date,
-        km_driven=entry.km_driven,
-        packages_delivered=entry.packages_delivered,
-        hours_worked=entry.hours_worked,
+        pocet_hd=entry.pocet_hd,
+        pocet_boxy=entry.pocet_boxy,
+        hd_psd_box=entry.hd_psd_box,
+        svoz_do_50=entry.svoz_do_50,
+        svoz_do_100=entry.svoz_do_100,
+        svoz_nad_100=entry.svoz_nad_100,
+        dobirky=entry.dobirky,
+        pocet_baliku=entry.pocet_baliku,
+        nedorucene=entry.nedorucene,
+        km=entry.km,
         note=entry.note,
         confirmed=entry.confirmed,
         extra_fields=entry.extra_fields or {},
@@ -112,9 +123,16 @@ def _dispute_to_out(dispute: PerformanceEntryDispute) -> PerformanceEntryDispute
         status=dispute.status,
         reported_by_id=dispute.reported_by_id,
         reported_by_name=dispute.reported_by.full_name,
-        proposed_km_driven=dispute.proposed_km_driven,
-        proposed_packages_delivered=dispute.proposed_packages_delivered,
-        proposed_hours_worked=dispute.proposed_hours_worked,
+        proposed_pocet_hd=dispute.proposed_pocet_hd,
+        proposed_pocet_boxy=dispute.proposed_pocet_boxy,
+        proposed_hd_psd_box=dispute.proposed_hd_psd_box,
+        proposed_svoz_do_50=dispute.proposed_svoz_do_50,
+        proposed_svoz_do_100=dispute.proposed_svoz_do_100,
+        proposed_svoz_nad_100=dispute.proposed_svoz_nad_100,
+        proposed_dobirky=dispute.proposed_dobirky,
+        proposed_pocet_baliku=dispute.proposed_pocet_baliku,
+        proposed_nedorucene=dispute.proposed_nedorucene,
+        proposed_km=dispute.proposed_km,
         proposed_note=dispute.proposed_note,
         proposed_confirmed=dispute.proposed_confirmed,
         proposed_extra_fields=dispute.proposed_extra_fields or {},
@@ -273,6 +291,33 @@ def update_field(
     return field
 
 
+@router.delete("/fields/{field_id}")
+def delete_field(field_id: int, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    """Vlastní pole jde trvale smazat, jen dokud v něm nikde není vyplněná hodnota -
+    jinak (i u záznamů, i u rozpracovaných hlášení chyby) by se zbořila historie dat
+    a jde jen deaktivovat (viz update_field). Vestavěná pole (core) smazat nejdou vůbec."""
+    field = db.query(PerformanceFieldDefinition).filter(PerformanceFieldDefinition.id == field_id).first()
+    if not field:
+        raise HTTPException(404, "Pole nenalezeno")
+    if field.core:
+        raise HTTPException(400, "Vestavěné pole nejde smazat, jen deaktivovat.")
+
+    used_in_entries = any(
+        str((e.extra_fields or {}).get(field.key, "")).strip()
+        for e in db.query(PerformanceEntry).all()
+    )
+    used_in_disputes = any(
+        str((d.proposed_extra_fields or {}).get(field.key, "")).strip()
+        for d in db.query(PerformanceEntryDispute).all()
+    )
+    if used_in_entries or used_in_disputes:
+        raise HTTPException(400, "Pole už má vyplněná data - jde jen deaktivovat, ne smazat.")
+
+    db.delete(field)
+    db.commit()
+    return {"ok": True}
+
+
 # ---------- Záznamy výkonu ----------
 
 @router.post("", response_model=PerformanceEntryOut)
@@ -282,7 +327,7 @@ def create_entry(
     current_user: User = Depends(get_current_user),
 ):
     _assert_route_allowed(current_user, payload.route_id)
-    _validate_extra_fields(db, payload.extra_fields)
+    _validate_required_fields(db, payload)
     _assert_no_skip_if_backdated(current_user, payload)
 
     # Kurýr smí mít na jeden den jen jeden rozpracovaný/hotový záznam (bez ohledu na trasu) -
@@ -311,9 +356,16 @@ def create_entry(
         user_id=current_user.id,
         route_id=payload.route_id,
         date=payload.date,
-        km_driven=payload.km_driven,
-        packages_delivered=payload.packages_delivered,
-        hours_worked=payload.hours_worked,
+        pocet_hd=payload.pocet_hd,
+        pocet_boxy=payload.pocet_boxy,
+        hd_psd_box=payload.hd_psd_box,
+        svoz_do_50=payload.svoz_do_50,
+        svoz_do_100=payload.svoz_do_100,
+        svoz_nad_100=payload.svoz_nad_100,
+        dobirky=payload.dobirky,
+        pocet_baliku=payload.pocet_baliku,
+        nedorucene=payload.nedorucene,
+        km=payload.km,
         note=payload.note,
         extra_fields=payload.extra_fields,
         skipped_fields=skipped,
@@ -351,7 +403,7 @@ def update_entry(
     if current_user.role != UserRole.admin and entry.user_id != current_user.id:
         raise HTTPException(403, "Nemáš oprávnění upravit tento záznam")
     _assert_route_allowed(current_user, payload.route_id)
-    _validate_extra_fields(db, payload.extra_fields)
+    _validate_required_fields(db, payload)
     _assert_no_skip_if_backdated(current_user, payload)
     if payload.route_id != entry.route_id or payload.date != entry.date:
         _assert_route_date_free(db, payload.route_id, payload.date, exclude_entry_id=entry.id)
@@ -436,9 +488,16 @@ def list_entry_edits(entry_id: int, db: Session = Depends(get_db), _: User = Dep
 # ---------- Nahlášené chyby (kolize na trase/dni) ----------
 
 def _apply_dispute_payload(dispute: PerformanceEntryDispute, payload: DisputeCreate) -> None:
-    dispute.proposed_km_driven = payload.km_driven
-    dispute.proposed_packages_delivered = payload.packages_delivered
-    dispute.proposed_hours_worked = payload.hours_worked
+    dispute.proposed_pocet_hd = payload.pocet_hd
+    dispute.proposed_pocet_boxy = payload.pocet_boxy
+    dispute.proposed_hd_psd_box = payload.hd_psd_box
+    dispute.proposed_svoz_do_50 = payload.svoz_do_50
+    dispute.proposed_svoz_do_100 = payload.svoz_do_100
+    dispute.proposed_svoz_nad_100 = payload.svoz_nad_100
+    dispute.proposed_dobirky = payload.dobirky
+    dispute.proposed_pocet_baliku = payload.pocet_baliku
+    dispute.proposed_nedorucene = payload.nedorucene
+    dispute.proposed_km = payload.km
     dispute.proposed_note = payload.note
     dispute.proposed_confirmed = payload.confirmed
     dispute.proposed_extra_fields = payload.extra_fields
@@ -579,9 +638,16 @@ def approve_dispute(
         user_id=dispute.reported_by_id,
         route_id=dispute.route_id,
         date=dispute.date,
-        km_driven=dispute.proposed_km_driven,
-        packages_delivered=dispute.proposed_packages_delivered,
-        hours_worked=dispute.proposed_hours_worked,
+        pocet_hd=dispute.proposed_pocet_hd,
+        pocet_boxy=dispute.proposed_pocet_boxy,
+        hd_psd_box=dispute.proposed_hd_psd_box,
+        svoz_do_50=dispute.proposed_svoz_do_50,
+        svoz_do_100=dispute.proposed_svoz_do_100,
+        svoz_nad_100=dispute.proposed_svoz_nad_100,
+        dobirky=dispute.proposed_dobirky,
+        pocet_baliku=dispute.proposed_pocet_baliku,
+        nedorucene=dispute.proposed_nedorucene,
+        km=dispute.proposed_km,
         note=dispute.proposed_note,
         # "confirmed" se odvozuje ze skipped_fields stejně jako u běžného vyplnění
         # (viz create_entry) - proposed_confirmed z hlášení chyby se ignoruje, ať
@@ -666,11 +732,17 @@ def export_csv(
 
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(["datum", "kuryr", "trasa", "km", "zasilky", "hodiny", "potvrzeno", "poznamka"])
+    writer.writerow([
+        "datum", "kuryr", "trasa", "pocet_hd", "pocet_boxy", "hd_psd_box",
+        "svoz_do_50", "svoz_do_100", "svoz_nad_100", "dobirky", "pocet_baliku",
+        "nedorucene", "km", "potvrzeno", "poznamka",
+    ])
     for e in q:
         writer.writerow([
             e.date, e.user.full_name, e.route.name,
-            e.km_driven, e.packages_delivered, e.hours_worked,
+            e.pocet_hd, e.pocet_boxy, e.hd_psd_box,
+            e.svoz_do_50, e.svoz_do_100, e.svoz_nad_100, e.dobirky, e.pocet_baliku,
+            e.nedorucene, e.km,
             "ano" if e.confirmed else "ne", e.note or "",
         ])
     buffer.seek(0)
@@ -696,9 +768,8 @@ def averages(
         count = len(entries)
         result.append(PerformanceAverages(
             user_id=u.id, full_name=u.full_name,
-            avg_km=(sum(e.km_driven for e in entries) / count) if count else 0,
-            avg_packages=(sum(e.packages_delivered for e in entries) / count) if count else 0,
-            avg_hours=(sum(e.hours_worked for e in entries) / count) if count else 0,
+            avg_km=(sum(e.km or 0 for e in entries) / count) if count else 0,
+            avg_pocet_baliku=(sum(e.pocet_baliku or 0 for e in entries) / count) if count else 0,
             entries_count=count,
         ))
     return result

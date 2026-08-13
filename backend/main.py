@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
 from database import Base, engine, SessionLocal
-from models import User, UserRole
+from models import User, UserRole, PerformanceFieldDefinition, PerformanceFieldType
 from auth import hash_password
 from routers import auth as auth_router
 from routers import fuel as fuel_router
@@ -24,6 +24,12 @@ Base.metadata.create_all(bind=engine)
 
 # create_all jen zakládá chybějící tabulky, ne chybějící sloupce v existujících -
 # u SQLite bez Alembicu tak nové sloupce přidáváme ručně, ať se nemusí mazat app.db.
+_ENTRY_INT_COLUMNS = [
+    "pocet_hd", "pocet_boxy", "hd_psd_box", "svoz_do_50", "svoz_do_100",
+    "svoz_nad_100", "dobirky", "pocet_baliku", "nedorucene",
+]
+
+
 def _ensure_columns() -> None:
     inspector = inspect(engine)
     existing = {c["name"] for c in inspector.get_columns("performance_entry_disputes")}
@@ -33,8 +39,88 @@ def _ensure_columns() -> None:
                 "ALTER TABLE performance_entry_disputes ADD COLUMN proposed_skipped_fields JSON"
             ))
 
+    entries_existing = {c["name"] for c in inspector.get_columns("performance_entries")}
+    disputes_existing = {c["name"] for c in inspector.get_columns("performance_entry_disputes")}
+    with engine.begin() as conn:
+        for col in _ENTRY_INT_COLUMNS:
+            if col not in entries_existing:
+                conn.execute(text(f"ALTER TABLE performance_entries ADD COLUMN {col} INTEGER"))
+            proposed_col = f"proposed_{col}"
+            if proposed_col not in disputes_existing:
+                conn.execute(text(
+                    f"ALTER TABLE performance_entry_disputes ADD COLUMN {proposed_col} INTEGER"
+                ))
+        if "km" not in entries_existing:
+            conn.execute(text("ALTER TABLE performance_entries ADD COLUMN km FLOAT"))
+        if "proposed_km" not in disputes_existing:
+            conn.execute(text("ALTER TABLE performance_entry_disputes ADD COLUMN proposed_km FLOAT"))
+
+
+# Vestavěné sloupce formuláře výkonu (viz _ENTRY_INT_COLUMNS + km výš) dostanou
+# vlastní PerformanceFieldDefinition řádek (core=True), aby je šlo skrývat/zobrazovat
+# stejným mechanismem jako admin-přidaná vlastní pole. Záporná position drží core pole
+# vždy před existujícími vlastními (ta mají position >= 1), ať se nic nepřehází.
+_CORE_FIELDS = [
+    ("pocet_hd", "Počet HD"),
+    ("pocet_boxy", "Počet Boxy"),
+    ("hd_psd_box", "HD → PSD/BOX"),
+    ("svoz_do_50", "Svoz do 50 ks"),
+    ("svoz_do_100", "Svoz do 100 ks"),
+    ("svoz_nad_100", "Svoz nad 100 ks"),
+    ("dobirky", "Dobírky"),
+    ("pocet_baliku", "Počet balíků"),
+    ("nedorucene", "Nedoručené"),
+    ("km", "Km"),
+]
+
+
+def _ensure_core_performance_fields() -> None:
+    inspector = inspect(engine)
+    fields_existing = {c["name"] for c in inspector.get_columns("performance_field_definitions")}
+    if "core" not in fields_existing:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE performance_field_definitions ADD COLUMN core BOOLEAN NOT NULL DEFAULT 0"
+            ))
+
+    db = SessionLocal()
+    try:
+        existing_keys = {
+            key for (key,) in db.query(PerformanceFieldDefinition.key).all()
+        }
+        for i, (key, label) in enumerate(_CORE_FIELDS):
+            if key in existing_keys:
+                continue
+            db.add(PerformanceFieldDefinition(
+                key=key, label=label, field_type=PerformanceFieldType.number,
+                required=False, active=True, core=True, position=-100 + i,
+            ))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _ensure_vacation_fields() -> None:
+    inspector = inspect(engine)
+    existing = {c["name"] for c in inspector.get_columns("vacation_days")}
+    with engine.begin() as conn:
+        if "request_group_id" not in existing:
+            conn.execute(text("ALTER TABLE vacation_days ADD COLUMN request_group_id INTEGER"))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_vacation_days_request_group_id "
+            "ON vacation_days(request_group_id)"
+        ))
+        # Staré řádky (založené po jednom, před zavedením skupin) dostanou samy
+        # sebe za group id - skupina o jednom řádku. Po prvním doplnění je sloupec
+        # u nových řádků vždy vyplněný, takže se při dalším startu nic nepřepíše.
+        conn.execute(text(
+            "UPDATE vacation_days SET request_group_id = id WHERE request_group_id IS NULL"
+        ))
+
 
 _ensure_columns()
+_ensure_core_performance_fields()
+_ensure_vacation_fields()
 
 app = FastAPI(title="MiruvWeb API")
 
