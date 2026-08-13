@@ -119,10 +119,23 @@ const entries = ref<Entry[]>([])
 const averages = ref<Average[]>([])
 const allUsers = ref<UserOption[]>([])
 
+const monthNames = [
+  'Leden', 'Únor', 'Březen', 'Duben', 'Květen', 'Červen',
+  'Červenec', 'Srpen', 'Září', 'Říjen', 'Listopad', 'Prosinec',
+]
+
 const selectedRoute = ref<number | null>(null)
 const selectedCourier = ref<number | null>(null)
+const filterMode = ref<'month' | 'day'>('month')
 const filterMonth = ref(new Date().getMonth() + 1)
 const filterYear = ref(new Date().getFullYear())
+const filterDay = ref(new Date().toISOString().slice(0, 10))
+
+watch(filterDay, (val) => {
+  const [y, m] = val.split('-').map(Number)
+  if (y) filterYear.value = y
+  if (m) filterMonth.value = m
+})
 
 function emptyForm() {
   return {
@@ -496,8 +509,15 @@ async function loadEntries() {
   const params = new URLSearchParams()
   if (selectedRoute.value) params.set('route_id', String(selectedRoute.value))
   if (isAdmin.value && selectedCourier.value) params.set('user_id', String(selectedCourier.value))
-  params.set('year', String(filterYear.value))
-  params.set('month', String(filterMonth.value))
+  if (filterMode.value === 'day') {
+    const [y, m, d] = filterDay.value.split('-').map(Number)
+    params.set('year', String(y))
+    params.set('month', String(m))
+    params.set('day', String(d))
+  } else {
+    params.set('year', String(filterYear.value))
+    params.set('month', String(filterMonth.value))
+  }
   entries.value = await api.get<Entry[]>(`/performance?${params}`)
 }
 
@@ -1137,13 +1157,30 @@ onMounted(async () => {
           </select>
         </div>
         <div class="field" style="margin:0">
-          <label>Měsíc</label>
-          <input v-model.number="filterMonth" type="number" min="1" max="12" @change="refreshFiltered" style="width:80px" />
+          <label>Zobrazit</label>
+          <select v-model="filterMode" @change="refreshFiltered">
+            <option value="month">Podle měsíce</option>
+            <option value="day">Podle konkrétního dne</option>
+          </select>
         </div>
-        <div class="field" style="margin:0">
-          <label>Rok</label>
-          <input v-model.number="filterYear" type="number" @change="refreshFiltered" style="width:100px" />
-        </div>
+        <template v-if="filterMode === 'month'">
+          <div class="field" style="margin:0">
+            <label>Měsíc</label>
+            <select v-model.number="filterMonth" @change="refreshFiltered" style="width:130px">
+              <option v-for="(name, i) in monthNames" :key="i" :value="i + 1">{{ name }}</option>
+            </select>
+          </div>
+          <div class="field" style="margin:0">
+            <label>Rok</label>
+            <input v-model.number="filterYear" type="number" @change="refreshFiltered" style="width:100px" />
+          </div>
+        </template>
+        <template v-else>
+          <div class="field" style="margin:0">
+            <label>Den</label>
+            <input v-model="filterDay" type="date" @change="refreshFiltered" />
+          </div>
+        </template>
         <button v-if="isAdmin" class="btn secondary" @click="exportCsv">Export do CSV</button>
       </div>
 
