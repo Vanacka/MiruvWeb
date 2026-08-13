@@ -24,6 +24,12 @@ Base.metadata.create_all(bind=engine)
 
 # create_all jen zakládá chybějící tabulky, ne chybějící sloupce v existujících -
 # u SQLite bez Alembicu tak nové sloupce přidáváme ručně, ať se nemusí mazat app.db.
+_ENTRY_INT_COLUMNS = [
+    "pocet_hd", "pocet_boxy", "hd_psd_box", "svoz_do_50", "svoz_do_100",
+    "svoz_nad_100", "dobirky", "pocet_baliku", "nedorucene",
+]
+
+
 def _ensure_columns() -> None:
     inspector = inspect(engine)
     existing = {c["name"] for c in inspector.get_columns("performance_entry_disputes")}
@@ -32,6 +38,22 @@ def _ensure_columns() -> None:
             conn.execute(text(
                 "ALTER TABLE performance_entry_disputes ADD COLUMN proposed_skipped_fields JSON"
             ))
+
+    entries_existing = {c["name"] for c in inspector.get_columns("performance_entries")}
+    disputes_existing = {c["name"] for c in inspector.get_columns("performance_entry_disputes")}
+    with engine.begin() as conn:
+        for col in _ENTRY_INT_COLUMNS:
+            if col not in entries_existing:
+                conn.execute(text(f"ALTER TABLE performance_entries ADD COLUMN {col} INTEGER"))
+            proposed_col = f"proposed_{col}"
+            if proposed_col not in disputes_existing:
+                conn.execute(text(
+                    f"ALTER TABLE performance_entry_disputes ADD COLUMN {proposed_col} INTEGER"
+                ))
+        if "km" not in entries_existing:
+            conn.execute(text("ALTER TABLE performance_entries ADD COLUMN km FLOAT"))
+        if "proposed_km" not in disputes_existing:
+            conn.execute(text("ALTER TABLE performance_entry_disputes ADD COLUMN proposed_km FLOAT"))
 
 
 _ensure_columns()

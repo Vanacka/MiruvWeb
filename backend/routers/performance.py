@@ -26,8 +26,9 @@ from holidays import is_czech_state_holiday
 # Sledovaná pole při úpravě záznamu - u těchto se do logu ukládá stará/nová hodnota.
 # "skipped_fields" (a z něj odvozené "confirmed") se řeší zvlášť, viz update_entry.
 _TRACKED_FIELDS = [
-    "route_id", "date", "km_driven", "packages_delivered",
-    "hours_worked", "note", "extra_fields",
+    "route_id", "date", "pocet_hd", "pocet_boxy", "hd_psd_box",
+    "svoz_do_50", "svoz_do_100", "svoz_nad_100", "dobirky", "pocet_baliku",
+    "nedorucene", "km", "note", "extra_fields",
 ]
 
 
@@ -85,9 +86,16 @@ def _entry_to_out(entry: PerformanceEntry) -> PerformanceEntryOut:
         user_id=entry.user_id,
         route_id=entry.route_id,
         date=entry.date,
-        km_driven=entry.km_driven,
-        packages_delivered=entry.packages_delivered,
-        hours_worked=entry.hours_worked,
+        pocet_hd=entry.pocet_hd,
+        pocet_boxy=entry.pocet_boxy,
+        hd_psd_box=entry.hd_psd_box,
+        svoz_do_50=entry.svoz_do_50,
+        svoz_do_100=entry.svoz_do_100,
+        svoz_nad_100=entry.svoz_nad_100,
+        dobirky=entry.dobirky,
+        pocet_baliku=entry.pocet_baliku,
+        nedorucene=entry.nedorucene,
+        km=entry.km,
         note=entry.note,
         confirmed=entry.confirmed,
         extra_fields=entry.extra_fields or {},
@@ -112,9 +120,16 @@ def _dispute_to_out(dispute: PerformanceEntryDispute) -> PerformanceEntryDispute
         status=dispute.status,
         reported_by_id=dispute.reported_by_id,
         reported_by_name=dispute.reported_by.full_name,
-        proposed_km_driven=dispute.proposed_km_driven,
-        proposed_packages_delivered=dispute.proposed_packages_delivered,
-        proposed_hours_worked=dispute.proposed_hours_worked,
+        proposed_pocet_hd=dispute.proposed_pocet_hd,
+        proposed_pocet_boxy=dispute.proposed_pocet_boxy,
+        proposed_hd_psd_box=dispute.proposed_hd_psd_box,
+        proposed_svoz_do_50=dispute.proposed_svoz_do_50,
+        proposed_svoz_do_100=dispute.proposed_svoz_do_100,
+        proposed_svoz_nad_100=dispute.proposed_svoz_nad_100,
+        proposed_dobirky=dispute.proposed_dobirky,
+        proposed_pocet_baliku=dispute.proposed_pocet_baliku,
+        proposed_nedorucene=dispute.proposed_nedorucene,
+        proposed_km=dispute.proposed_km,
         proposed_note=dispute.proposed_note,
         proposed_confirmed=dispute.proposed_confirmed,
         proposed_extra_fields=dispute.proposed_extra_fields or {},
@@ -311,9 +326,16 @@ def create_entry(
         user_id=current_user.id,
         route_id=payload.route_id,
         date=payload.date,
-        km_driven=payload.km_driven,
-        packages_delivered=payload.packages_delivered,
-        hours_worked=payload.hours_worked,
+        pocet_hd=payload.pocet_hd,
+        pocet_boxy=payload.pocet_boxy,
+        hd_psd_box=payload.hd_psd_box,
+        svoz_do_50=payload.svoz_do_50,
+        svoz_do_100=payload.svoz_do_100,
+        svoz_nad_100=payload.svoz_nad_100,
+        dobirky=payload.dobirky,
+        pocet_baliku=payload.pocet_baliku,
+        nedorucene=payload.nedorucene,
+        km=payload.km,
         note=payload.note,
         extra_fields=payload.extra_fields,
         skipped_fields=skipped,
@@ -436,9 +458,16 @@ def list_entry_edits(entry_id: int, db: Session = Depends(get_db), _: User = Dep
 # ---------- Nahlášené chyby (kolize na trase/dni) ----------
 
 def _apply_dispute_payload(dispute: PerformanceEntryDispute, payload: DisputeCreate) -> None:
-    dispute.proposed_km_driven = payload.km_driven
-    dispute.proposed_packages_delivered = payload.packages_delivered
-    dispute.proposed_hours_worked = payload.hours_worked
+    dispute.proposed_pocet_hd = payload.pocet_hd
+    dispute.proposed_pocet_boxy = payload.pocet_boxy
+    dispute.proposed_hd_psd_box = payload.hd_psd_box
+    dispute.proposed_svoz_do_50 = payload.svoz_do_50
+    dispute.proposed_svoz_do_100 = payload.svoz_do_100
+    dispute.proposed_svoz_nad_100 = payload.svoz_nad_100
+    dispute.proposed_dobirky = payload.dobirky
+    dispute.proposed_pocet_baliku = payload.pocet_baliku
+    dispute.proposed_nedorucene = payload.nedorucene
+    dispute.proposed_km = payload.km
     dispute.proposed_note = payload.note
     dispute.proposed_confirmed = payload.confirmed
     dispute.proposed_extra_fields = payload.extra_fields
@@ -579,9 +608,16 @@ def approve_dispute(
         user_id=dispute.reported_by_id,
         route_id=dispute.route_id,
         date=dispute.date,
-        km_driven=dispute.proposed_km_driven,
-        packages_delivered=dispute.proposed_packages_delivered,
-        hours_worked=dispute.proposed_hours_worked,
+        pocet_hd=dispute.proposed_pocet_hd,
+        pocet_boxy=dispute.proposed_pocet_boxy,
+        hd_psd_box=dispute.proposed_hd_psd_box,
+        svoz_do_50=dispute.proposed_svoz_do_50,
+        svoz_do_100=dispute.proposed_svoz_do_100,
+        svoz_nad_100=dispute.proposed_svoz_nad_100,
+        dobirky=dispute.proposed_dobirky,
+        pocet_baliku=dispute.proposed_pocet_baliku,
+        nedorucene=dispute.proposed_nedorucene,
+        km=dispute.proposed_km,
         note=dispute.proposed_note,
         # "confirmed" se odvozuje ze skipped_fields stejně jako u běžného vyplnění
         # (viz create_entry) - proposed_confirmed z hlášení chyby se ignoruje, ať
@@ -666,11 +702,17 @@ def export_csv(
 
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(["datum", "kuryr", "trasa", "km", "zasilky", "hodiny", "potvrzeno", "poznamka"])
+    writer.writerow([
+        "datum", "kuryr", "trasa", "pocet_hd", "pocet_boxy", "hd_psd_box",
+        "svoz_do_50", "svoz_do_100", "svoz_nad_100", "dobirky", "pocet_baliku",
+        "nedorucene", "km", "potvrzeno", "poznamka",
+    ])
     for e in q:
         writer.writerow([
             e.date, e.user.full_name, e.route.name,
-            e.km_driven, e.packages_delivered, e.hours_worked,
+            e.pocet_hd, e.pocet_boxy, e.hd_psd_box,
+            e.svoz_do_50, e.svoz_do_100, e.svoz_nad_100, e.dobirky, e.pocet_baliku,
+            e.nedorucene, e.km,
             "ano" if e.confirmed else "ne", e.note or "",
         ])
     buffer.seek(0)
@@ -696,9 +738,8 @@ def averages(
         count = len(entries)
         result.append(PerformanceAverages(
             user_id=u.id, full_name=u.full_name,
-            avg_km=(sum(e.km_driven for e in entries) / count) if count else 0,
-            avg_packages=(sum(e.packages_delivered for e in entries) / count) if count else 0,
-            avg_hours=(sum(e.hours_worked for e in entries) / count) if count else 0,
+            avg_km=(sum(e.km or 0 for e in entries) / count) if count else 0,
+            avg_pocet_baliku=(sum(e.pocet_baliku or 0 for e in entries) / count) if count else 0,
             entries_count=count,
         ))
     return result

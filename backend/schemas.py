@@ -130,9 +130,16 @@ class PerformanceFieldOut(BaseModel):
 class PerformanceEntryCreate(BaseModel):
     route_id: int
     date: date
-    km_driven: float = 0
-    packages_delivered: int = 0
-    hours_worked: float = 0
+    pocet_hd: Optional[int] = None
+    pocet_boxy: Optional[int] = None
+    hd_psd_box: Optional[int] = None
+    svoz_do_50: Optional[int] = None
+    svoz_do_100: Optional[int] = None
+    svoz_nad_100: Optional[int] = None
+    dobirky: Optional[int] = None
+    pocet_baliku: Optional[int] = None
+    nedorucene: Optional[int] = None
+    km: Optional[float] = None
     note: Optional[str] = None
     extra_fields: dict[str, Any] = {}
     # None = nezadáno (u ručních oprav přes plochý formulář se stav vyplnění nemění).
@@ -146,9 +153,16 @@ class PerformanceEntryOut(BaseModel):
     user_id: int
     route_id: int
     date: date
-    km_driven: float
-    packages_delivered: int
-    hours_worked: float
+    pocet_hd: Optional[int]
+    pocet_boxy: Optional[int]
+    hd_psd_box: Optional[int]
+    svoz_do_50: Optional[int]
+    svoz_do_100: Optional[int]
+    svoz_nad_100: Optional[int]
+    dobirky: Optional[int]
+    pocet_baliku: Optional[int]
+    nedorucene: Optional[int]
+    km: Optional[float]
     note: Optional[str]
     confirmed: bool
     extra_fields: dict[str, Any]
@@ -173,9 +187,16 @@ class PerformanceEntryEditOut(BaseModel):
 class DisputeCreate(BaseModel):
     route_id: int
     date: date
-    km_driven: float = 0
-    packages_delivered: int = 0
-    hours_worked: float = 0
+    pocet_hd: Optional[int] = None
+    pocet_boxy: Optional[int] = None
+    hd_psd_box: Optional[int] = None
+    svoz_do_50: Optional[int] = None
+    svoz_do_100: Optional[int] = None
+    svoz_nad_100: Optional[int] = None
+    dobirky: Optional[int] = None
+    pocet_baliku: Optional[int] = None
+    nedorucene: Optional[int] = None
+    km: Optional[float] = None
     note: Optional[str] = None
     confirmed: bool = False
     extra_fields: dict[str, Any] = {}
@@ -194,9 +215,16 @@ class PerformanceEntryDisputeOut(BaseModel):
     status: DisputeStatus
     reported_by_id: int
     reported_by_name: str
-    proposed_km_driven: float
-    proposed_packages_delivered: int
-    proposed_hours_worked: float
+    proposed_pocet_hd: Optional[int]
+    proposed_pocet_boxy: Optional[int]
+    proposed_hd_psd_box: Optional[int]
+    proposed_svoz_do_50: Optional[int]
+    proposed_svoz_do_100: Optional[int]
+    proposed_svoz_nad_100: Optional[int]
+    proposed_dobirky: Optional[int]
+    proposed_pocet_baliku: Optional[int]
+    proposed_nedorucene: Optional[int]
+    proposed_km: Optional[float]
     proposed_note: Optional[str]
     proposed_confirmed: bool
     proposed_extra_fields: dict[str, Any]
@@ -214,8 +242,7 @@ class PerformanceAverages(BaseModel):
     user_id: int
     full_name: str
     avg_km: float
-    avg_packages: float
-    avg_hours: float
+    avg_pocet_baliku: float
     entries_count: int
 
 

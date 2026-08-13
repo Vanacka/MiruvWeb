@@ -108,10 +108,17 @@ class PerformanceEntry(Base):
     route_id = Column(Integer, ForeignKey("routes.id"), nullable=False)
     date = Column(Date, nullable=False)
 
-    # Flexibilní data formuláře - km, počet zásilek, hodiny apod.
-    km_driven = Column(Float, default=0)
-    packages_delivered = Column(Integer, default=0)
-    hours_worked = Column(Float, default=0)
+    # Denní výkon - viz PerformanceEntryCreate pro popis jednotlivých polí.
+    pocet_hd = Column(Integer, nullable=True)
+    pocet_boxy = Column(Integer, nullable=True)
+    hd_psd_box = Column(Integer, nullable=True)
+    svoz_do_50 = Column(Integer, nullable=True)
+    svoz_do_100 = Column(Integer, nullable=True)
+    svoz_nad_100 = Column(Integer, nullable=True)
+    dobirky = Column(Integer, nullable=True)
+    pocet_baliku = Column(Integer, nullable=True)
+    nedorucene = Column(Integer, nullable=True)
+    km = Column(Float, nullable=True)
     note = Column(Text, nullable=True)
 
     # Hodnoty vlastních polí, která si admin sám přidal (viz PerformanceFieldDefinition),
@@ -170,9 +177,16 @@ class PerformanceEntryDispute(Base):
     reported_by_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
     # Údaje, které nahlašující kurýr tvrdí, že patří na tuto trasu/den
-    proposed_km_driven = Column(Float, default=0)
-    proposed_packages_delivered = Column(Integer, default=0)
-    proposed_hours_worked = Column(Float, default=0)
+    proposed_pocet_hd = Column(Integer, nullable=True)
+    proposed_pocet_boxy = Column(Integer, nullable=True)
+    proposed_hd_psd_box = Column(Integer, nullable=True)
+    proposed_svoz_do_50 = Column(Integer, nullable=True)
+    proposed_svoz_do_100 = Column(Integer, nullable=True)
+    proposed_svoz_nad_100 = Column(Integer, nullable=True)
+    proposed_dobirky = Column(Integer, nullable=True)
+    proposed_pocet_baliku = Column(Integer, nullable=True)
+    proposed_nedorucene = Column(Integer, nullable=True)
+    proposed_km = Column(Float, nullable=True)
     proposed_note = Column(Text, nullable=True)
     proposed_confirmed = Column(Boolean, default=False)
     proposed_extra_fields = Column(JSON, default=dict)

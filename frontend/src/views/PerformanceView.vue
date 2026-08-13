@@ -18,9 +18,16 @@ interface Entry {
   user_id: number
   route_id: number
   date: string
-  km_driven: number
-  packages_delivered: number
-  hours_worked: number
+  pocet_hd: number | null
+  pocet_boxy: number | null
+  hd_psd_box: number | null
+  svoz_do_50: number | null
+  svoz_do_100: number | null
+  svoz_nad_100: number | null
+  dobirky: number | null
+  pocet_baliku: number | null
+  nedorucene: number | null
+  km: number | null
   note: string | null
   confirmed: boolean
   extra_fields: Record<string, string | number>
@@ -35,8 +42,7 @@ interface Average {
   user_id: number
   full_name: string
   avg_km: number
-  avg_packages: number
-  avg_hours: number
+  avg_pocet_baliku: number
   entries_count: number
 }
 interface UserOption { id: number; full_name: string; role: 'admin' | 'courier' }
@@ -61,9 +67,16 @@ interface Dispute {
   status: 'pending' | 'approved' | 'rejected'
   reported_by_id: number
   reported_by_name: string
-  proposed_km_driven: number
-  proposed_packages_delivered: number
-  proposed_hours_worked: number
+  proposed_pocet_hd: number | null
+  proposed_pocet_boxy: number | null
+  proposed_hd_psd_box: number | null
+  proposed_svoz_do_50: number | null
+  proposed_svoz_do_100: number | null
+  proposed_svoz_nad_100: number | null
+  proposed_dobirky: number | null
+  proposed_pocet_baliku: number | null
+  proposed_nedorucene: number | null
+  proposed_km: number | null
   proposed_note: string | null
   proposed_confirmed: boolean
   proposed_extra_fields: Record<string, string | number>
@@ -80,9 +93,16 @@ interface Dispute {
 const fieldLabels: Record<string, string> = {
   route_id: 'Trasa',
   date: 'Datum',
-  km_driven: 'Kilometry',
-  packages_delivered: 'Počet zásilek',
-  hours_worked: 'Odpracované hodiny',
+  pocet_hd: 'Počet HD',
+  pocet_boxy: 'Počet Boxy',
+  hd_psd_box: 'HD → PSD/BOX',
+  svoz_do_50: 'Svoz do 50 ks',
+  svoz_do_100: 'Svoz do 100 ks',
+  svoz_nad_100: 'Svoz nad 100 ks',
+  dobirky: 'Dobírky',
+  pocet_baliku: 'Počet balíků',
+  nedorucene: 'Nedoručené',
+  km: 'Km',
   note: 'Poznámka',
   confirmed: 'Potvrzeno',
   extra_fields: 'Vlastní pole',
@@ -101,24 +121,23 @@ const allUsers = ref<UserOption[]>([])
 
 const selectedRoute = ref<number | null>(null)
 const selectedCourier = ref<number | null>(null)
-const filterMode = ref<'month' | 'day'>('month')
 const filterMonth = ref(new Date().getMonth() + 1)
 const filterYear = ref(new Date().getFullYear())
-const filterDay = ref(new Date().toISOString().slice(0, 10))
-
-watch(filterDay, (val) => {
-  const [y, m] = val.split('-').map(Number)
-  if (y) filterYear.value = y
-  if (m) filterMonth.value = m
-})
 
 function emptyForm() {
   return {
     route_id: null as number | null,
     date: new Date().toISOString().slice(0, 10),
-    km_driven: 0,
-    packages_delivered: 0,
-    hours_worked: 0,
+    pocet_hd: null as number | null,
+    pocet_boxy: null as number | null,
+    hd_psd_box: null as number | null,
+    svoz_do_50: null as number | null,
+    svoz_do_100: null as number | null,
+    svoz_nad_100: null as number | null,
+    dobirky: null as number | null,
+    pocet_baliku: null as number | null,
+    nedorucene: null as number | null,
+    km: null as number | null,
     note: '',
     confirmed: false,
     extra_fields: {} as Record<string, string>,
@@ -159,9 +178,16 @@ const reportMode = ref(false)
 const reportRouteId = ref<number | null>(null)
 
 const steps = computed<Step[]>(() => [
-  { key: 'km_driven', label: 'Kilometry', required: false, field_type: 'number' },
-  { key: 'packages_delivered', label: 'Počet zásilek', required: false, field_type: 'number' },
-  { key: 'hours_worked', label: 'Odpracované hodiny', required: false, field_type: 'number' },
+  { key: 'pocet_hd', label: 'Počet HD', required: false, field_type: 'number' },
+  { key: 'pocet_boxy', label: 'Počet Boxy', required: false, field_type: 'number' },
+  { key: 'hd_psd_box', label: 'HD → PSD/BOX', required: false, field_type: 'number' },
+  { key: 'svoz_do_50', label: 'Svoz do 50 ks', required: false, field_type: 'number' },
+  { key: 'svoz_do_100', label: 'Svoz do 100 ks', required: false, field_type: 'number' },
+  { key: 'svoz_nad_100', label: 'Svoz nad 100 ks', required: false, field_type: 'number' },
+  { key: 'dobirky', label: 'Dobírky', required: false, field_type: 'number' },
+  { key: 'pocet_baliku', label: 'Počet balíků', required: false, field_type: 'number' },
+  { key: 'nedorucene', label: 'Nedoručené', required: false, field_type: 'number' },
+  { key: 'km', label: 'Km', required: false, field_type: 'number' },
   ...activeFields.value.map((f) => ({
     key: f.key, label: f.label, required: f.required, field_type: f.field_type,
   })),
@@ -182,9 +208,16 @@ const showTodayDoneMessage = computed(() =>
 const isBackfilling = computed(() => form.value.date !== new Date().toISOString().slice(0, 10))
 
 function getStepValue(step: Step): string | number {
-  if (step.key === 'km_driven') return form.value.km_driven
-  if (step.key === 'packages_delivered') return form.value.packages_delivered
-  if (step.key === 'hours_worked') return form.value.hours_worked
+  if (step.key === 'pocet_hd') return form.value.pocet_hd ?? ''
+  if (step.key === 'pocet_boxy') return form.value.pocet_boxy ?? ''
+  if (step.key === 'hd_psd_box') return form.value.hd_psd_box ?? ''
+  if (step.key === 'svoz_do_50') return form.value.svoz_do_50 ?? ''
+  if (step.key === 'svoz_do_100') return form.value.svoz_do_100 ?? ''
+  if (step.key === 'svoz_nad_100') return form.value.svoz_nad_100 ?? ''
+  if (step.key === 'dobirky') return form.value.dobirky ?? ''
+  if (step.key === 'pocet_baliku') return form.value.pocet_baliku ?? ''
+  if (step.key === 'nedorucene') return form.value.nedorucene ?? ''
+  if (step.key === 'km') return form.value.km ?? ''
   if (step.key === 'note') return form.value.note
   return form.value.extra_fields[step.key] ?? ''
 }
@@ -213,9 +246,16 @@ function resumeEntry(entry: Entry) {
   form.value = {
     route_id: entry.route_id,
     date: entry.date,
-    km_driven: entry.km_driven,
-    packages_delivered: entry.packages_delivered,
-    hours_worked: entry.hours_worked,
+    pocet_hd: entry.pocet_hd,
+    pocet_boxy: entry.pocet_boxy,
+    hd_psd_box: entry.hd_psd_box,
+    svoz_do_50: entry.svoz_do_50,
+    svoz_do_100: entry.svoz_do_100,
+    svoz_nad_100: entry.svoz_nad_100,
+    dobirky: entry.dobirky,
+    pocet_baliku: entry.pocet_baliku,
+    nedorucene: entry.nedorucene,
+    km: entry.km,
     note: entry.note || '',
     confirmed: entry.confirmed,
     extra_fields: { ...entry.extra_fields } as Record<string, string>,
@@ -236,9 +276,16 @@ function resumeDispute(d: Dispute) {
   form.value = {
     route_id: d.route_id,
     date: d.date,
-    km_driven: d.proposed_km_driven,
-    packages_delivered: d.proposed_packages_delivered,
-    hours_worked: d.proposed_hours_worked,
+    pocet_hd: d.proposed_pocet_hd,
+    pocet_boxy: d.proposed_pocet_boxy,
+    hd_psd_box: d.proposed_hd_psd_box,
+    svoz_do_50: d.proposed_svoz_do_50,
+    svoz_do_100: d.proposed_svoz_do_100,
+    svoz_nad_100: d.proposed_svoz_nad_100,
+    dobirky: d.proposed_dobirky,
+    pocet_baliku: d.proposed_pocet_baliku,
+    nedorucene: d.proposed_nedorucene,
+    km: d.proposed_km,
     note: d.proposed_note || '',
     confirmed: d.proposed_confirmed,
     extra_fields: { ...d.proposed_extra_fields } as Record<string, string>,
@@ -345,9 +392,16 @@ async function submitReportRoute() {
       : await api.post<Dispute>('/performance/disputes', {
           route_id: reportRouteId.value,
           date: form.value.date,
-          km_driven: 0,
-          packages_delivered: 0,
-          hours_worked: 0,
+          pocet_hd: null,
+          pocet_boxy: null,
+          hd_psd_box: null,
+          svoz_do_50: null,
+          svoz_do_100: null,
+          svoz_nad_100: null,
+          dobirky: null,
+          pocet_baliku: null,
+          nedorucene: null,
+          km: null,
           note: null,
           confirmed: false,
           extra_fields: {},
@@ -442,15 +496,8 @@ async function loadEntries() {
   const params = new URLSearchParams()
   if (selectedRoute.value) params.set('route_id', String(selectedRoute.value))
   if (isAdmin.value && selectedCourier.value) params.set('user_id', String(selectedCourier.value))
-  if (filterMode.value === 'day') {
-    const [y, m, d] = filterDay.value.split('-').map(Number)
-    params.set('year', String(y))
-    params.set('month', String(m))
-    params.set('day', String(d))
-  } else {
-    params.set('year', String(filterYear.value))
-    params.set('month', String(filterMonth.value))
-  }
+  params.set('year', String(filterYear.value))
+  params.set('month', String(filterMonth.value))
   entries.value = await api.get<Entry[]>(`/performance?${params}`)
 }
 
@@ -473,9 +520,16 @@ function startEdit(e: Entry) {
   form.value = {
     route_id: e.route_id,
     date: e.date,
-    km_driven: e.km_driven,
-    packages_delivered: e.packages_delivered,
-    hours_worked: e.hours_worked,
+    pocet_hd: e.pocet_hd,
+    pocet_boxy: e.pocet_boxy,
+    hd_psd_box: e.hd_psd_box,
+    svoz_do_50: e.svoz_do_50,
+    svoz_do_100: e.svoz_do_100,
+    svoz_nad_100: e.svoz_nad_100,
+    dobirky: e.dobirky,
+    pocet_baliku: e.pocet_baliku,
+    nedorucene: e.nedorucene,
+    km: e.km,
     note: e.note || '',
     confirmed: e.confirmed,
     extra_fields: { ...e.extra_fields } as Record<string, string>,
@@ -733,18 +787,52 @@ onMounted(async () => {
         <template v-if="editingId && !resuming">
           <div class="form-row">
             <div class="field">
-              <label>Kilometry</label>
-              <input v-model.number="form.km_driven" type="number" step="0.1" />
+              <label>Počet HD</label>
+              <input v-model.number="form.pocet_hd" type="number" />
             </div>
             <div class="field">
-              <label>Počet zásilek</label>
-              <input v-model.number="form.packages_delivered" type="number" />
+              <label>Počet Boxy</label>
+              <input v-model.number="form.pocet_boxy" type="number" />
+            </div>
+            <div class="field">
+              <label>HD → PSD/BOX</label>
+              <input v-model.number="form.hd_psd_box" type="number" />
             </div>
           </div>
           <div class="form-row">
             <div class="field">
-              <label>Odpracované hodiny</label>
-              <input v-model.number="form.hours_worked" type="number" step="0.1" />
+              <label>Svoz do 50 ks</label>
+              <input v-model.number="form.svoz_do_50" type="number" />
+            </div>
+            <div class="field">
+              <label>Svoz do 100 ks</label>
+              <input v-model.number="form.svoz_do_100" type="number" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>Svoz nad 100 ks</label>
+              <input v-model.number="form.svoz_nad_100" type="number" />
+            </div>
+            <div class="field">
+              <label>Dobírky</label>
+              <input v-model.number="form.dobirky" type="number" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>Počet balíků</label>
+              <input v-model.number="form.pocet_baliku" type="number" />
+            </div>
+            <div class="field">
+              <label>Nedoručené</label>
+              <input v-model.number="form.nedorucene" type="number" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>Km</label>
+              <input v-model.number="form.km" type="number" step="0.1" />
             </div>
             <div class="field">
               <label>Poznámka</label>
@@ -783,19 +871,53 @@ onMounted(async () => {
             </p>
             <label>{{ currentStepDef.label }}<span v-if="currentStepDef.required"> *</span></label>
             <input
-              v-if="currentStepDef.key === 'km_driven'"
-              v-model.number="form.km_driven"
-              type="number"
-              step="0.1"
-            />
-            <input
-              v-else-if="currentStepDef.key === 'packages_delivered'"
-              v-model.number="form.packages_delivered"
+              v-if="currentStepDef.key === 'pocet_hd'"
+              v-model.number="form.pocet_hd"
               type="number"
             />
             <input
-              v-else-if="currentStepDef.key === 'hours_worked'"
-              v-model.number="form.hours_worked"
+              v-else-if="currentStepDef.key === 'pocet_boxy'"
+              v-model.number="form.pocet_boxy"
+              type="number"
+            />
+            <input
+              v-else-if="currentStepDef.key === 'hd_psd_box'"
+              v-model.number="form.hd_psd_box"
+              type="number"
+            />
+            <input
+              v-else-if="currentStepDef.key === 'svoz_do_50'"
+              v-model.number="form.svoz_do_50"
+              type="number"
+            />
+            <input
+              v-else-if="currentStepDef.key === 'svoz_do_100'"
+              v-model.number="form.svoz_do_100"
+              type="number"
+            />
+            <input
+              v-else-if="currentStepDef.key === 'svoz_nad_100'"
+              v-model.number="form.svoz_nad_100"
+              type="number"
+            />
+            <input
+              v-else-if="currentStepDef.key === 'dobirky'"
+              v-model.number="form.dobirky"
+              type="number"
+            />
+            <input
+              v-else-if="currentStepDef.key === 'pocet_baliku'"
+              v-model.number="form.pocet_baliku"
+              type="number"
+            />
+            <input
+              v-else-if="currentStepDef.key === 'nedorucene'"
+              v-model.number="form.nedorucene"
+              type="number"
+            />
+            <input
+              v-else-if="currentStepDef.key === 'km'"
+              v-model.number="form.km"
               type="number"
               step="0.1"
             />
@@ -888,8 +1010,8 @@ onMounted(async () => {
               Původní záznam (vyplnil {{ d.conflicting_entry_owner_name }})
             </p>
             <p style="font-size:13px;margin:0">
-              {{ d.conflicting_entry.km_driven }} km · {{ d.conflicting_entry.packages_delivered }} zásilek ·
-              {{ d.conflicting_entry.hours_worked }} h
+              {{ d.conflicting_entry.km ?? '-' }} km · {{ d.conflicting_entry.pocet_baliku ?? '-' }} balíků ·
+              {{ d.conflicting_entry.nedorucene ?? '-' }} nedoručených
               <span v-if="d.conflicting_entry.note"> · „{{ d.conflicting_entry.note }}“</span>
             </p>
           </div>
@@ -898,8 +1020,8 @@ onMounted(async () => {
               Nahlásil {{ d.reported_by_name }} (tvrdí, že tohle patří na {{ d.route_name }})
             </p>
             <p style="font-size:13px;margin:0">
-              {{ d.proposed_km_driven }} km · {{ d.proposed_packages_delivered }} zásilek ·
-              {{ d.proposed_hours_worked }} h
+              {{ d.proposed_km ?? '-' }} km · {{ d.proposed_pocet_baliku ?? '-' }} balíků ·
+              {{ d.proposed_nedorucene ?? '-' }} nedoručených
               <span v-if="d.proposed_note"> · „{{ d.proposed_note }}“</span>
             </p>
           </div>
@@ -1015,28 +1137,13 @@ onMounted(async () => {
           </select>
         </div>
         <div class="field" style="margin:0">
-          <label>Zobrazit</label>
-          <select v-model="filterMode" @change="refreshFiltered">
-            <option value="month">Podle měsíce</option>
-            <option value="day">Podle konkrétního dne</option>
-          </select>
+          <label>Měsíc</label>
+          <input v-model.number="filterMonth" type="number" min="1" max="12" @change="refreshFiltered" style="width:80px" />
         </div>
-        <template v-if="filterMode === 'month'">
-          <div class="field" style="margin:0">
-            <label>Měsíc</label>
-            <input v-model.number="filterMonth" type="number" min="1" max="12" @change="refreshFiltered" style="width:80px" />
-          </div>
-          <div class="field" style="margin:0">
-            <label>Rok</label>
-            <input v-model.number="filterYear" type="number" @change="refreshFiltered" style="width:100px" />
-          </div>
-        </template>
-        <template v-else>
-          <div class="field" style="margin:0">
-            <label>Den</label>
-            <input v-model="filterDay" type="date" @change="refreshFiltered" />
-          </div>
-        </template>
+        <div class="field" style="margin:0">
+          <label>Rok</label>
+          <input v-model.number="filterYear" type="number" @change="refreshFiltered" style="width:100px" />
+        </div>
         <button v-if="isAdmin" class="btn secondary" @click="exportCsv">Export do CSV</button>
       </div>
 
@@ -1045,8 +1152,17 @@ onMounted(async () => {
           <tr>
             <th>Datum</th>
             <th v-if="isAdmin">Kurýr</th>
-            <th>Trasa</th><th class="num">Km</th><th class="num">Zásilky</th>
-            <th class="num">Hodiny</th>
+            <th>Trasa</th>
+            <th class="num">Počet HD</th>
+            <th class="num">Počet Boxy</th>
+            <th class="num">HD → PSD/BOX</th>
+            <th class="num">Svoz do 50 ks</th>
+            <th class="num">Svoz do 100 ks</th>
+            <th class="num">Svoz nad 100 ks</th>
+            <th class="num">Dobírky</th>
+            <th class="num">Počet balíků</th>
+            <th class="num">Nedoručené</th>
+            <th class="num">Km</th>
             <th v-for="f in activeFields" :key="f.id" class="num">{{ f.label }}</th>
             <th>Potvrzeno</th><th>Poznámka</th><th>Po termínu</th><th></th>
           </tr>
@@ -1057,9 +1173,16 @@ onMounted(async () => {
               <td>{{ e.date }}</td>
               <td v-if="isAdmin">{{ courierName(e.user_id) }}</td>
               <td>{{ routes.find(r => r.id === e.route_id)?.name || e.route_id }}</td>
-              <td class="num">{{ e.km_driven }}</td>
-              <td class="num">{{ e.packages_delivered }}</td>
-              <td class="num">{{ e.hours_worked }}</td>
+              <td class="num">{{ e.pocet_hd ?? '-' }}</td>
+              <td class="num">{{ e.pocet_boxy ?? '-' }}</td>
+              <td class="num">{{ e.hd_psd_box ?? '-' }}</td>
+              <td class="num">{{ e.svoz_do_50 ?? '-' }}</td>
+              <td class="num">{{ e.svoz_do_100 ?? '-' }}</td>
+              <td class="num">{{ e.svoz_nad_100 ?? '-' }}</td>
+              <td class="num">{{ e.dobirky ?? '-' }}</td>
+              <td class="num">{{ e.pocet_baliku ?? '-' }}</td>
+              <td class="num">{{ e.nedorucene ?? '-' }}</td>
+              <td class="num">{{ e.km ?? '-' }}</td>
               <td v-for="f in activeFields" :key="f.id" class="num">{{ e.extra_fields[f.key] ?? '—' }}</td>
               <td>{{ e.confirmed ? '✓' : '—' }}</td>
               <td>{{ e.note }}</td>
@@ -1128,14 +1251,13 @@ onMounted(async () => {
       <h3 style="margin-top:0">Měsíční průměry</h3>
       <table>
         <thead>
-          <tr><th>Kurýr</th><th class="num">Prům. km</th><th class="num">Prům. zásilky</th><th class="num">Prům. hodiny</th><th class="num">Záznamů</th></tr>
+          <tr><th>Kurýr</th><th class="num">Prům. km</th><th class="num">Prům. počet balíků</th><th class="num">Záznamů</th></tr>
         </thead>
         <tbody>
           <tr v-for="a in averages" :key="a.user_id">
             <td>{{ a.full_name }}</td>
             <td class="num">{{ a.avg_km.toFixed(1) }}</td>
-            <td class="num">{{ a.avg_packages.toFixed(1) }}</td>
-            <td class="num">{{ a.avg_hours.toFixed(1) }}</td>
+            <td class="num">{{ a.avg_pocet_baliku.toFixed(1) }}</td>
             <td class="num">{{ a.entries_count }}</td>
           </tr>
         </tbody>
