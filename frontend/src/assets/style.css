@@ -343,9 +343,10 @@ label {
 .cal-day:hover { border-color: currentColor; }
 .cal-day.selected { border-color: var(--slate); box-shadow: 0 0 0 1px var(--slate); }
 
-/* Popisek svátku v buňce jen tam, kde je na něj dost místa (širší obrazovka) -
-   na mobilu se stejná informace zobrazí po kliknutí v detailu pod kalendářem. */
-.cal-day-holiday-label {
+/* Popisek (název svátku, nebo kdo má ten den dovolenou) v buňce jen tam, kde je
+   na něj dost místa (širší obrazovka) - stejná informace jde vždycky dohledat
+   i po kliknutí v detailu pod kalendářem, kam se vejde i delší text. */
+.cal-day-sublabel {
   display: none;
   font-family: var(--font-ui);
   font-size: 9px;
@@ -355,7 +356,7 @@ label {
   overflow: hidden;
 }
 @media (min-width: 640px) {
-  .cal-day-holiday-label {
+  .cal-day-sublabel {
     display: -webkit-box;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;

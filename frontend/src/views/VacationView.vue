@@ -96,6 +96,10 @@ function dayTitle(d: DayColor): string {
   return [...d.approved_users, ...d.pending_users].join(', ')
 }
 
+function dayPeople(d: DayColor): string {
+  return [...d.approved_users, ...d.pending_users].join(', ')
+}
+
 // Klik na den otevře/zavře detail (hlavně kvůli mobilu, kde není hover) - do
 // buňky samotné se tak nemusí vměstnat celý text, když je moc malá.
 const selectedDate = ref<string | null>(null)
@@ -198,7 +202,13 @@ onMounted(async () => {
             @click="selectDay(d)"
           >
             <span>{{ d.date.slice(-2) }}</span>
-            <span v-if="d.holiday_name" class="cal-day-holiday-label">{{ d.holiday_name }}</span>
+            <span v-if="d.holiday_name" class="cal-day-sublabel">{{ d.holiday_name }}</span>
+            <span
+              v-else-if="d.approved_users.length || d.pending_users.length"
+              class="cal-day-sublabel"
+            >
+              {{ dayPeople(d) }}
+            </span>
           </div>
         </div>
       </div>

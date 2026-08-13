@@ -20,13 +20,19 @@ interface SummaryItem {
   total_price: number
   unpaid_price: number
 }
+interface UserOption { id: number; full_name: string; role: 'admin' | 'courier' }
 
 const { user } = useAuth()
 const isAdmin = computed(() => user.value?.role === 'admin')
 
 const entries = ref<FuelEntry[]>([])
 const summary = ref<SummaryItem[]>([])
+const allUsers = ref<UserOption[]>([])
 const expanded = ref<Set<number>>(new Set())
+
+function courierName(userId: number) {
+  return allUsers.value.find((u) => u.id === userId)?.full_name || `#${userId}`
+}
 
 const date = ref(new Date().toISOString().slice(0, 10))
 const liters = ref<number | null>(null)
@@ -40,6 +46,7 @@ async function load() {
   entries.value = await api.get<FuelEntry[]>('/fuel')
   if (isAdmin.value) {
     summary.value = await api.get<SummaryItem[]>('/fuel/summary')
+    allUsers.value = await api.get<UserOption[]>('/auth/users')
   }
 }
 
@@ -148,13 +155,14 @@ onMounted(load)
       <table>
         <thead>
           <tr>
-            <th>Datum</th><th>SPZ</th><th class="num">Litry</th><th class="num">Cena</th><th>Stav</th>
+            <th>Datum</th><th v-if="isAdmin">Kurýr</th><th>SPZ</th><th class="num">Litry</th><th class="num">Cena</th><th>Stav</th>
           </tr>
         </thead>
         <tbody>
           <template v-for="e in entries" :key="e.id">
             <tr @click="toggle(e.id)" style="cursor:pointer">
               <td>{{ e.date }}</td>
+              <td v-if="isAdmin">{{ courierName(e.user_id) }}</td>
               <td>{{ e.license_plate }}</td>
               <td class="num">{{ e.liters }}</td>
               <td class="num">{{ e.total_price }}</td>
@@ -165,7 +173,7 @@ onMounted(load)
               </td>
             </tr>
             <tr v-if="expanded.has(e.id)">
-              <td colspan="5" style="background:var(--paper)">
+              <td :colspan="isAdmin ? 6 : 5" style="background:var(--paper)">
                 <div v-if="e.receipt_photo_path" style="margin-bottom:10px">
                   <img :src="`${api.API_URL}/${e.receipt_photo_path}`" style="max-width:220px;border-radius:6px" />
                 </div>
