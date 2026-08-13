@@ -78,14 +78,15 @@ function changeMonth(delta: number) {
   if (m < 1) { m = 12; y-- }
   month.value = m
   year.value = y
+  selectedDate.value = null
   load()
 }
 
 function dayClasses(d: DayColor) {
-  const mine = !isAdmin.value && !d.is_weekend && !d.is_holiday ? myVacationFor(d.date) : undefined
+  const mine = !isAdmin.value ? myVacationFor(d.date) : undefined
   return {
     'mine-pending': mine?.status === 'pending',
-    mine: !!mine,
+    selected: selectedDate.value === d.date,
   }
 }
 
@@ -95,16 +96,24 @@ function dayTitle(d: DayColor): string {
   return [...d.approved_users, ...d.pending_users].join(', ')
 }
 
-// Klik teď jen ruší vlastní už podanou žádost (nový den se žádá přes formulář
-// "Požádat o dovolenou" níže) - klik na cizí/víkendový/sváteční den nic nedělá.
-async function toggleDay(d: DayColor) {
-  if (isAdmin.value || d.is_weekend || d.is_holiday) return
-  const mine = myVacationFor(d.date)
+// Klik na den otevře/zavře detail (hlavně kvůli mobilu, kde není hover) - do
+// buňky samotné se tak nemusí vměstnat celý text, když je moc malá.
+const selectedDate = ref<string | null>(null)
+const selectedDay = computed(() => days.value.find((d) => d.date === selectedDate.value) ?? null)
+
+function selectDay(d: DayColor) {
+  selectedDate.value = selectedDate.value === d.date ? null : d.date
+}
+
+async function cancelSelected() {
+  if (!selectedDay.value) return
+  const mine = myVacationFor(selectedDay.value.date)
   if (!mine) return
   error.value = ''
   if (!window.confirm('Opravdu chceš zrušit žádost o dovolenou na tento den?')) return
   try {
     await api.delete(`/vacation/${mine.id}`)
+    selectedDate.value = null
     await load()
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'Nepodařilo se zrušit žádost'
@@ -171,30 +180,59 @@ onMounted(async () => {
     <h1><span class="eyebrow">Dovolená</span>Kalendář dovolených</h1>
 
     <div class="card">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <button class="btn secondary" @click="changeMonth(-1)">&larr;</button>
-        <strong>{{ monthNames[month - 1] }} {{ year }}</strong>
-        <button class="btn secondary" @click="changeMonth(1)">&rarr;</button>
-      </div>
-      <div class="calendar-grid">
-        <div v-for="w in weekdayNames" :key="w" class="cal-day-header">{{ w }}</div>
-        <div v-for="n in leadingBlanks" :key="`blank-${n}`"></div>
-        <div
-          v-for="d in days"
-          :key="d.date"
-          class="cal-day"
-          :class="[d.color, dayClasses(d)]"
-          :title="dayTitle(d)"
-          @click="toggleDay(d)"
-        >
-          {{ d.date.slice(-2) }}
+      <div class="calendar-wrap">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <button class="btn secondary" @click="changeMonth(-1)">&larr;</button>
+          <strong>{{ monthNames[month - 1] }} {{ year }}</strong>
+          <button class="btn secondary" @click="changeMonth(1)">&rarr;</button>
+        </div>
+        <div class="calendar-grid">
+          <div v-for="w in weekdayNames" :key="w" class="cal-day-header">{{ w }}</div>
+          <div v-for="n in leadingBlanks" :key="`blank-${n}`"></div>
+          <div
+            v-for="d in days"
+            :key="d.date"
+            class="cal-day"
+            :class="[d.color, dayClasses(d)]"
+            :title="dayTitle(d)"
+            @click="selectDay(d)"
+          >
+            <span>{{ d.date.slice(-2) }}</span>
+            <span v-if="d.holiday_name" class="cal-day-holiday-label">{{ d.holiday_name }}</span>
+          </div>
         </div>
       </div>
+
+      <div v-if="selectedDay" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:14px">
+        <p style="margin:0 0 6px;font-weight:600">{{ selectedDay.date }}</p>
+        <p v-if="selectedDay.holiday_name" style="margin:0 0 4px;font-size:13px">Státní svátek: {{ selectedDay.holiday_name }}</p>
+        <p v-else-if="selectedDay.is_weekend" style="margin:0 0 4px;font-size:13px">Víkend</p>
+        <p v-if="selectedDay.approved_users.length" style="margin:0 0 4px;font-size:13px">
+          Schválená dovolená: {{ selectedDay.approved_users.join(', ') }}
+        </p>
+        <p v-if="selectedDay.pending_users.length" style="margin:0 0 4px;font-size:13px">
+          Čeká na schválení: {{ selectedDay.pending_users.join(', ') }}
+        </p>
+        <p
+          v-if="!selectedDay.holiday_name && !selectedDay.is_weekend && !selectedDay.approved_users.length && !selectedDay.pending_users.length"
+          style="margin:0;font-size:13px;color:var(--muted)"
+        >
+          Volno.
+        </p>
+        <button
+          v-if="!isAdmin && myVacationFor(selectedDay.date)"
+          class="btn secondary"
+          style="margin-top:8px"
+          @click="cancelSelected"
+        >
+          Zrušit žádost
+        </button>
+      </div>
+
       <p v-if="error" class="error">{{ error }}</p>
       <p style="font-size:12px;color:var(--muted);margin-top:14px">
         🟢 volno &nbsp; 🟡 čeká na schválení &nbsp; 🔴 obsazeno &nbsp; 🔵 tvoje schválená dovolená &nbsp;
-        ⚪ víkend/svátek &nbsp;
-        <span v-if="!isAdmin">· přerušovaný rámeček = tvoje čekající žádost, klikni pro zrušení</span>
+        ⚪ víkend/svátek
       </p>
     </div>
 
@@ -213,9 +251,6 @@ onMounted(async () => {
       <button class="btn" :disabled="rangeSubmitting || !rangeStart || !rangeEnd" @click="submitRange">
         {{ rangeSubmitting ? 'Odesílám…' : 'Odeslat žádost' }}
       </button>
-      <p style="font-size:12px;color:var(--muted);margin-top:8px">
-        Víkendy a státní svátky se v období automaticky přeskočí. Pro jeden den zadej stejné datum do obou polí.
-      </p>
     </div>
 
     <div class="card" v-if="isAdmin">
