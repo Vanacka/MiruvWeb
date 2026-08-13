@@ -50,12 +50,15 @@ def _assert_route_allowed(user: User, route_id: int) -> None:
         raise HTTPException(403, "Tato trasa není mezi tvými přiřazenými trasami")
 
 
-def _validate_extra_fields(db: Session, extra_fields: dict) -> None:
+def _validate_required_fields(db: Session, payload: PerformanceEntryCreate) -> None:
+    """Kontroluje povinnost jak u vlastních polí (extra_fields), tak u vestavěných
+    sloupců (core=True) - obojí je teď spravované přes stejný PerformanceFieldDefinition."""
     active_fields = db.query(PerformanceFieldDefinition).filter(
         PerformanceFieldDefinition.active == True  # noqa: E712
     ).all()
     for f in active_fields:
-        if f.required and not str(extra_fields.get(f.key, "")).strip():
+        value = getattr(payload, f.key, None) if f.core else payload.extra_fields.get(f.key)
+        if f.required and not str(value if value is not None else "").strip():
             raise HTTPException(400, f"Pole '{f.label}' je povinné")
 
 
@@ -288,6 +291,33 @@ def update_field(
     return field
 
 
+@router.delete("/fields/{field_id}")
+def delete_field(field_id: int, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    """Vlastní pole jde trvale smazat, jen dokud v něm nikde není vyplněná hodnota -
+    jinak (i u záznamů, i u rozpracovaných hlášení chyby) by se zbořila historie dat
+    a jde jen deaktivovat (viz update_field). Vestavěná pole (core) smazat nejdou vůbec."""
+    field = db.query(PerformanceFieldDefinition).filter(PerformanceFieldDefinition.id == field_id).first()
+    if not field:
+        raise HTTPException(404, "Pole nenalezeno")
+    if field.core:
+        raise HTTPException(400, "Vestavěné pole nejde smazat, jen deaktivovat.")
+
+    used_in_entries = any(
+        str((e.extra_fields or {}).get(field.key, "")).strip()
+        for e in db.query(PerformanceEntry).all()
+    )
+    used_in_disputes = any(
+        str((d.proposed_extra_fields or {}).get(field.key, "")).strip()
+        for d in db.query(PerformanceEntryDispute).all()
+    )
+    if used_in_entries or used_in_disputes:
+        raise HTTPException(400, "Pole už má vyplněná data - jde jen deaktivovat, ne smazat.")
+
+    db.delete(field)
+    db.commit()
+    return {"ok": True}
+
+
 # ---------- Záznamy výkonu ----------
 
 @router.post("", response_model=PerformanceEntryOut)
@@ -297,7 +327,7 @@ def create_entry(
     current_user: User = Depends(get_current_user),
 ):
     _assert_route_allowed(current_user, payload.route_id)
-    _validate_extra_fields(db, payload.extra_fields)
+    _validate_required_fields(db, payload)
     _assert_no_skip_if_backdated(current_user, payload)
 
     # Kurýr smí mít na jeden den jen jeden rozpracovaný/hotový záznam (bez ohledu na trasu) -
@@ -373,7 +403,7 @@ def update_entry(
     if current_user.role != UserRole.admin and entry.user_id != current_user.id:
         raise HTTPException(403, "Nemáš oprávnění upravit tento záznam")
     _assert_route_allowed(current_user, payload.route_id)
-    _validate_extra_fields(db, payload.extra_fields)
+    _validate_required_fields(db, payload)
     _assert_no_skip_if_backdated(current_user, payload)
     if payload.route_id != entry.route_id or payload.date != entry.date:
         _assert_route_date_free(db, payload.route_id, payload.date, exclude_entry_id=entry.id)

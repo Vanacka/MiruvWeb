@@ -125,6 +125,7 @@ class PerformanceFieldOut(BaseModel):
     required: bool
     position: int
     active: bool
+    core: bool
 
 
 class PerformanceEntryCreate(BaseModel):

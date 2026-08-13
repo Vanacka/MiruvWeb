@@ -224,6 +224,9 @@ class PerformanceFieldDefinition(Base):
     required = Column(Boolean, default=False)
     position = Column(Integer, default=0)
     active = Column(Boolean, default=True)
+    # Vestavěné pole (deset "byznys" sloupců PerformanceEntry) vs. vlastní pole
+    # přidané adminem - core řádky se jen seedují při startu, nejdou vytvořit z API.
+    core = Column(Boolean, default=False, nullable=False)
 
 
 class DailyChecklist(Base):

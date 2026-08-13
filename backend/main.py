@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
 from database import Base, engine, SessionLocal
-from models import User, UserRole
+from models import User, UserRole, PerformanceFieldDefinition, PerformanceFieldType
 from auth import hash_password
 from routers import auth as auth_router
 from routers import fuel as fuel_router
@@ -56,7 +56,52 @@ def _ensure_columns() -> None:
             conn.execute(text("ALTER TABLE performance_entry_disputes ADD COLUMN proposed_km FLOAT"))
 
 
+# Vestavěné sloupce formuláře výkonu (viz _ENTRY_INT_COLUMNS + km výš) dostanou
+# vlastní PerformanceFieldDefinition řádek (core=True), aby je šlo skrývat/zobrazovat
+# stejným mechanismem jako admin-přidaná vlastní pole. Záporná position drží core pole
+# vždy před existujícími vlastními (ta mají position >= 1), ať se nic nepřehází.
+_CORE_FIELDS = [
+    ("pocet_hd", "Počet HD"),
+    ("pocet_boxy", "Počet Boxy"),
+    ("hd_psd_box", "HD → PSD/BOX"),
+    ("svoz_do_50", "Svoz do 50 ks"),
+    ("svoz_do_100", "Svoz do 100 ks"),
+    ("svoz_nad_100", "Svoz nad 100 ks"),
+    ("dobirky", "Dobírky"),
+    ("pocet_baliku", "Počet balíků"),
+    ("nedorucene", "Nedoručené"),
+    ("km", "Km"),
+]
+
+
+def _ensure_core_performance_fields() -> None:
+    inspector = inspect(engine)
+    fields_existing = {c["name"] for c in inspector.get_columns("performance_field_definitions")}
+    if "core" not in fields_existing:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE performance_field_definitions ADD COLUMN core BOOLEAN NOT NULL DEFAULT 0"
+            ))
+
+    db = SessionLocal()
+    try:
+        existing_keys = {
+            key for (key,) in db.query(PerformanceFieldDefinition.key).all()
+        }
+        for i, (key, label) in enumerate(_CORE_FIELDS):
+            if key in existing_keys:
+                continue
+            db.add(PerformanceFieldDefinition(
+                key=key, label=label, field_type=PerformanceFieldType.number,
+                required=False, active=True, core=True, position=-100 + i,
+            ))
+        db.commit()
+    finally:
+        db.close()
+
+
 _ensure_columns()
+_ensure_core_performance_fields()
 
 app = FastAPI(title="MiruvWeb API")
 

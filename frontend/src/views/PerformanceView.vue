@@ -12,6 +12,7 @@ interface FieldDef {
   required: boolean
   position: number
   active: boolean
+  core: boolean
 }
 interface Entry {
   id: number
@@ -137,23 +138,23 @@ watch(filterDay, (val) => {
   if (m) filterMonth.value = m
 })
 
-function emptyForm() {
+interface FormState {
+  route_id: number | null
+  date: string
+  note: string
+  confirmed: boolean
+  // Hodnoty vestavěných i vlastních polí pohromadě, klíčované podle
+  // FieldDefinition.key - viz fieldsByKey pro rozlišení core/custom při odeslání.
+  fields: Record<string, string | number | null>
+}
+
+function emptyForm(): FormState {
   return {
-    route_id: null as number | null,
+    route_id: null,
     date: new Date().toISOString().slice(0, 10),
-    pocet_hd: null as number | null,
-    pocet_boxy: null as number | null,
-    hd_psd_box: null as number | null,
-    svoz_do_50: null as number | null,
-    svoz_do_100: null as number | null,
-    svoz_nad_100: null as number | null,
-    dobirky: null as number | null,
-    pocet_baliku: null as number | null,
-    nedorucene: null as number | null,
-    km: null as number | null,
     note: '',
     confirmed: false,
-    extra_fields: {} as Record<string, string>,
+    fields: {},
   }
 }
 
@@ -190,17 +191,11 @@ const resumingDispute = ref<number | null>(null)
 const reportMode = ref(false)
 const reportRouteId = ref<number | null>(null)
 
+const fieldsByKey = computed<Record<string, FieldDef>>(() =>
+  Object.fromEntries(activeFields.value.map((f) => [f.key, f])),
+)
+
 const steps = computed<Step[]>(() => [
-  { key: 'pocet_hd', label: 'Počet HD', required: false, field_type: 'number' },
-  { key: 'pocet_boxy', label: 'Počet Boxy', required: false, field_type: 'number' },
-  { key: 'hd_psd_box', label: 'HD → PSD/BOX', required: false, field_type: 'number' },
-  { key: 'svoz_do_50', label: 'Svoz do 50 ks', required: false, field_type: 'number' },
-  { key: 'svoz_do_100', label: 'Svoz do 100 ks', required: false, field_type: 'number' },
-  { key: 'svoz_nad_100', label: 'Svoz nad 100 ks', required: false, field_type: 'number' },
-  { key: 'dobirky', label: 'Dobírky', required: false, field_type: 'number' },
-  { key: 'pocet_baliku', label: 'Počet balíků', required: false, field_type: 'number' },
-  { key: 'nedorucene', label: 'Nedoručené', required: false, field_type: 'number' },
-  { key: 'km', label: 'Km', required: false, field_type: 'number' },
   ...activeFields.value.map((f) => ({
     key: f.key, label: f.label, required: f.required, field_type: f.field_type,
   })),
@@ -221,18 +216,8 @@ const showTodayDoneMessage = computed(() =>
 const isBackfilling = computed(() => form.value.date !== new Date().toISOString().slice(0, 10))
 
 function getStepValue(step: Step): string | number {
-  if (step.key === 'pocet_hd') return form.value.pocet_hd ?? ''
-  if (step.key === 'pocet_boxy') return form.value.pocet_boxy ?? ''
-  if (step.key === 'hd_psd_box') return form.value.hd_psd_box ?? ''
-  if (step.key === 'svoz_do_50') return form.value.svoz_do_50 ?? ''
-  if (step.key === 'svoz_do_100') return form.value.svoz_do_100 ?? ''
-  if (step.key === 'svoz_nad_100') return form.value.svoz_nad_100 ?? ''
-  if (step.key === 'dobirky') return form.value.dobirky ?? ''
-  if (step.key === 'pocet_baliku') return form.value.pocet_baliku ?? ''
-  if (step.key === 'nedorucene') return form.value.nedorucene ?? ''
-  if (step.key === 'km') return form.value.km ?? ''
   if (step.key === 'note') return form.value.note
-  return form.value.extra_fields[step.key] ?? ''
+  return form.value.fields[step.key] ?? ''
 }
 
 function hasStepValue(step: Step): boolean {
@@ -253,26 +238,41 @@ async function findMyEntryForDate(dateStr: string): Promise<Entry | null> {
   return result.find((en) => en.user_id === user.value?.id) ?? null
 }
 
+// Sdílený builder pro form.value ze zdroje, který má core hodnoty jako pojmenované
+// vlastnosti (Entry, nebo Dispute s prefixem "proposed_") a custom hodnoty v
+// extra_fields - core rozpozná podle FieldDef.core, zbytek bere jako custom.
+function buildForm(opts: {
+  route_id: number
+  date: string
+  note: string | null
+  confirmed: boolean
+  extra_fields: Record<string, string | number>
+  getCore: (key: string) => number | null
+}): FormState {
+  const fields: Record<string, string | number | null> = { ...opts.extra_fields }
+  for (const f of activeFields.value) {
+    if (f.core) fields[f.key] = opts.getCore(f.key)
+  }
+  return {
+    route_id: opts.route_id,
+    date: opts.date,
+    note: opts.note || '',
+    confirmed: opts.confirmed,
+    fields,
+  }
+}
+
 function resumeEntry(entry: Entry) {
   resuming.value = true
   editingId.value = entry.id
-  form.value = {
+  form.value = buildForm({
     route_id: entry.route_id,
     date: entry.date,
-    pocet_hd: entry.pocet_hd,
-    pocet_boxy: entry.pocet_boxy,
-    hd_psd_box: entry.hd_psd_box,
-    svoz_do_50: entry.svoz_do_50,
-    svoz_do_100: entry.svoz_do_100,
-    svoz_nad_100: entry.svoz_nad_100,
-    dobirky: entry.dobirky,
-    pocet_baliku: entry.pocet_baliku,
-    nedorucene: entry.nedorucene,
-    km: entry.km,
-    note: entry.note || '',
+    note: entry.note,
     confirmed: entry.confirmed,
-    extra_fields: { ...entry.extra_fields } as Record<string, string>,
-  }
+    extra_fields: entry.extra_fields,
+    getCore: (key) => (entry as unknown as Record<string, number | null>)[key] ?? null,
+  })
   wizardActive.value = true
   currentStep.value = 0
   skippedFields.value = new Set(entry.skipped_fields)
@@ -286,23 +286,14 @@ function resumeDispute(d: Dispute) {
   resuming.value = true
   resumingDispute.value = d.id
   editingId.value = null
-  form.value = {
+  form.value = buildForm({
     route_id: d.route_id,
     date: d.date,
-    pocet_hd: d.proposed_pocet_hd,
-    pocet_boxy: d.proposed_pocet_boxy,
-    hd_psd_box: d.proposed_hd_psd_box,
-    svoz_do_50: d.proposed_svoz_do_50,
-    svoz_do_100: d.proposed_svoz_do_100,
-    svoz_nad_100: d.proposed_svoz_nad_100,
-    dobirky: d.proposed_dobirky,
-    pocet_baliku: d.proposed_pocet_baliku,
-    nedorucene: d.proposed_nedorucene,
-    km: d.proposed_km,
-    note: d.proposed_note || '',
+    note: d.proposed_note,
     confirmed: d.proposed_confirmed,
-    extra_fields: { ...d.proposed_extra_fields } as Record<string, string>,
-  }
+    extra_fields: d.proposed_extra_fields,
+    getCore: (key) => (d as unknown as Record<string, number | null>)[`proposed_${key}`] ?? null,
+  })
   wizardActive.value = true
   currentStep.value = 0
   skippedFields.value = new Set(d.proposed_skipped_fields)
@@ -405,16 +396,7 @@ async function submitReportRoute() {
       : await api.post<Dispute>('/performance/disputes', {
           route_id: reportRouteId.value,
           date: form.value.date,
-          pocet_hd: null,
-          pocet_boxy: null,
-          hd_psd_box: null,
-          svoz_do_50: null,
-          svoz_do_100: null,
-          svoz_nad_100: null,
-          dobirky: null,
-          pocet_baliku: null,
-          nedorucene: null,
-          km: null,
+          ...Object.fromEntries(activeFields.value.filter((f) => f.core).map((f) => [f.key, null])),
           note: null,
           confirmed: false,
           extra_fields: {},
@@ -440,6 +422,11 @@ const fieldError = ref('')
 const expandedLogId = ref<number | null>(null)
 const editLogs = ref<Record<number, EditLogEntry[]>>({})
 const loadingLog = ref<number | null>(null)
+
+function entryFieldValue(e: Entry, f: FieldDef): string | number {
+  const v = f.core ? (e as unknown as Record<string, unknown>)[f.key] : e.extra_fields[f.key]
+  return v === null || v === undefined || v === '' ? '-' : (v as string | number)
+}
 
 function courierName(userId: number) {
   return allUsers.value.find((u) => u.id === userId)?.full_name || `#${userId}`
@@ -537,23 +524,14 @@ function startEdit(e: Entry) {
   exitWizard()
   resuming.value = false
   editingId.value = e.id
-  form.value = {
+  form.value = buildForm({
     route_id: e.route_id,
     date: e.date,
-    pocet_hd: e.pocet_hd,
-    pocet_boxy: e.pocet_boxy,
-    hd_psd_box: e.hd_psd_box,
-    svoz_do_50: e.svoz_do_50,
-    svoz_do_100: e.svoz_do_100,
-    svoz_nad_100: e.svoz_nad_100,
-    dobirky: e.dobirky,
-    pocet_baliku: e.pocet_baliku,
-    nedorucene: e.nedorucene,
-    km: e.km,
-    note: e.note || '',
+    note: e.note,
     confirmed: e.confirmed,
-    extra_fields: { ...e.extra_fields } as Record<string, string>,
-  }
+    extra_fields: e.extra_fields,
+    getCore: (key) => (e as unknown as Record<string, number | null>)[key] ?? null,
+  })
   formError.value = ''
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
@@ -565,6 +543,26 @@ function cancelEdit() {
   exitWizard()
 }
 
+// Form.fields drží core i custom hodnoty pohromadě - před odesláním na backend
+// se musí rozdělit zpět na ploché vlastnosti (core) + extra_fields (custom),
+// protože backend schema pořád očekává ten starý plochý tvar.
+function buildSubmitPayload(): Record<string, unknown> {
+  const core: Record<string, unknown> = {}
+  const extra: Record<string, string> = {}
+  for (const [key, value] of Object.entries(form.value.fields)) {
+    if (fieldsByKey.value[key]?.core) core[key] = value === '' ? null : value
+    else extra[key] = value as string
+  }
+  return {
+    route_id: form.value.route_id,
+    date: form.value.date,
+    note: form.value.note,
+    confirmed: form.value.confirmed,
+    ...core,
+    extra_fields: extra,
+  }
+}
+
 async function submit(): Promise<boolean> {
   formError.value = ''
   conflict.value = null
@@ -574,7 +572,7 @@ async function submit(): Promise<boolean> {
   }
   submitting.value = true
   const isFlatEdit = editingId.value && !resuming.value
-  const payload = isFlatEdit ? form.value : { ...form.value, skipped_fields: [...skippedFields.value] }
+  const payload = isFlatEdit ? buildSubmitPayload() : { ...buildSubmitPayload(), skipped_fields: [...skippedFields.value] }
   try {
     if (editingId.value) {
       await api.patch(`/performance/${editingId.value}`, payload)
@@ -641,7 +639,7 @@ async function submitDispute() {
   if (!form.value.route_id) return
   disputeSubmitting.value = true
   formError.value = ''
-  const payload = { ...form.value, skipped_fields: [...skippedFields.value] }
+  const payload = { ...buildSubmitPayload(), skipped_fields: [...skippedFields.value] }
   try {
     if (resumingDispute.value) {
       await api.patch<Dispute>(`/performance/disputes/${resumingDispute.value}`, payload)
@@ -717,6 +715,25 @@ async function submitField() {
 async function toggleFieldActive(f: FieldDef) {
   await api.patch(`/performance/fields/${f.id}`, { active: !f.active })
   await loadFields()
+}
+
+const deletingFieldId = ref<number | null>(null)
+
+async function deleteField(f: FieldDef) {
+  if (!window.confirm(`Opravdu chceš pole "${f.label}" smazat?`)) return
+  deletingFieldId.value = f.id
+  fieldError.value = ''
+  try {
+    await api.delete(`/performance/fields/${f.id}`)
+    // Rovnou odebrat lokálně místo spoléhání na loadFields() - ať je to v tabulce
+    // vidět hned, bez závislosti na dalším síťovém requestu.
+    allFields.value = allFields.value.filter((x) => x.id !== f.id)
+    activeFields.value = activeFields.value.filter((x) => x.id !== f.id)
+  } catch (e) {
+    fieldError.value = e instanceof Error ? e.message : 'Nepodařilo se smazat pole'
+  } finally {
+    deletingFieldId.value = null
+  }
 }
 
 function exportCsv() {
@@ -805,68 +822,21 @@ onMounted(async () => {
 
         <!-- Úprava existujícího záznamu: klasický plochý formulář -->
         <template v-if="editingId && !resuming">
-          <div class="form-row">
-            <div class="field">
-              <label>Počet HD</label>
-              <input v-model.number="form.pocet_hd" type="number" />
-            </div>
-            <div class="field">
-              <label>Počet Boxy</label>
-              <input v-model.number="form.pocet_boxy" type="number" />
-            </div>
-            <div class="field">
-              <label>HD → PSD/BOX</label>
-              <input v-model.number="form.hd_psd_box" type="number" />
-            </div>
-          </div>
-          <div class="form-row">
-            <div class="field">
-              <label>Svoz do 50 ks</label>
-              <input v-model.number="form.svoz_do_50" type="number" />
-            </div>
-            <div class="field">
-              <label>Svoz do 100 ks</label>
-              <input v-model.number="form.svoz_do_100" type="number" />
-            </div>
-          </div>
-          <div class="form-row">
-            <div class="field">
-              <label>Svoz nad 100 ks</label>
-              <input v-model.number="form.svoz_nad_100" type="number" />
-            </div>
-            <div class="field">
-              <label>Dobírky</label>
-              <input v-model.number="form.dobirky" type="number" />
-            </div>
-          </div>
-          <div class="form-row">
-            <div class="field">
-              <label>Počet balíků</label>
-              <input v-model.number="form.pocet_baliku" type="number" />
-            </div>
-            <div class="field">
-              <label>Nedoručené</label>
-              <input v-model.number="form.nedorucene" type="number" />
-            </div>
-          </div>
-          <div class="form-row">
-            <div class="field">
-              <label>Km</label>
-              <input v-model.number="form.km" type="number" step="0.1" />
-            </div>
-            <div class="field">
-              <label>Poznámka</label>
-              <input v-model="form.note" />
-            </div>
-          </div>
           <div class="form-row" v-if="activeFields.length">
             <div class="field" v-for="f in activeFields" :key="f.id">
               <label>{{ f.label }}<span v-if="f.required"> *</span></label>
               <input
-                v-model="form.extra_fields[f.key]"
+                v-model="form.fields[f.key]"
                 :type="f.field_type === 'number' ? 'number' : 'text'"
+                :step="f.key === 'km' ? '0.1' : undefined"
                 :required="f.required"
               />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>Poznámka</label>
+              <input v-model="form.note" />
             </div>
           </div>
           <button class="btn" type="submit" :disabled="submitting">
@@ -890,62 +860,17 @@ onMounted(async () => {
               Krok {{ currentStep + 1 }} / {{ activeWizardSteps.length }}
             </p>
             <label>{{ currentStepDef.label }}<span v-if="currentStepDef.required"> *</span></label>
+            <input v-if="currentStepDef.key === 'note'" v-model="form.note" />
             <input
-              v-if="currentStepDef.key === 'pocet_hd'"
-              v-model.number="form.pocet_hd"
+              v-else-if="currentStepDef.field_type === 'number'"
+              v-model.number="form.fields[currentStepDef.key]"
               type="number"
+              :step="currentStepDef.key === 'km' ? '0.1' : undefined"
             />
-            <input
-              v-else-if="currentStepDef.key === 'pocet_boxy'"
-              v-model.number="form.pocet_boxy"
-              type="number"
-            />
-            <input
-              v-else-if="currentStepDef.key === 'hd_psd_box'"
-              v-model.number="form.hd_psd_box"
-              type="number"
-            />
-            <input
-              v-else-if="currentStepDef.key === 'svoz_do_50'"
-              v-model.number="form.svoz_do_50"
-              type="number"
-            />
-            <input
-              v-else-if="currentStepDef.key === 'svoz_do_100'"
-              v-model.number="form.svoz_do_100"
-              type="number"
-            />
-            <input
-              v-else-if="currentStepDef.key === 'svoz_nad_100'"
-              v-model.number="form.svoz_nad_100"
-              type="number"
-            />
-            <input
-              v-else-if="currentStepDef.key === 'dobirky'"
-              v-model.number="form.dobirky"
-              type="number"
-            />
-            <input
-              v-else-if="currentStepDef.key === 'pocet_baliku'"
-              v-model.number="form.pocet_baliku"
-              type="number"
-            />
-            <input
-              v-else-if="currentStepDef.key === 'nedorucene'"
-              v-model.number="form.nedorucene"
-              type="number"
-            />
-            <input
-              v-else-if="currentStepDef.key === 'km'"
-              v-model.number="form.km"
-              type="number"
-              step="0.1"
-            />
-            <input v-else-if="currentStepDef.key === 'note'" v-model="form.note" />
             <input
               v-else
-              v-model="form.extra_fields[currentStepDef.key]"
-              :type="currentStepDef.field_type === 'number' ? 'number' : 'text'"
+              v-model="form.fields[currentStepDef.key]"
+              type="text"
             />
             <p v-if="(currentStepDef.required || isBackfilling) && !hasStepValue(currentStepDef)" style="font-size:12px;color:var(--muted);margin:6px 0 0">
               {{ isBackfilling ? 'Zpětně vyplňovaný formulář nejde nechat neúplný, musíš ho vyplnit.' : 'Toto pole je povinné, musíš ho vyplnit.' }}
@@ -1087,10 +1012,11 @@ onMounted(async () => {
     </div>
 
     <div class="card" v-if="isAdmin">
-      <h3 style="margin-top:0">Vlastní pole formuláře</h3>
+      <h3 style="margin-top:0">Pole formuláře</h3>
       <p style="font-size:12px;color:var(--muted);margin-top:-8px">
-        Přidej si vlastní sloupec do formuláře výkonu (např. počet krabic). Neaktivní pole zůstanou
-        zachovaná u starých záznamů, jen zmizí z formuláře a tabulky.
+        Aktivuj/deaktivuj libovolný sloupec formuláře výkonu - vestavěný i vlastní. Neaktivní
+        pole zůstanou zachovaná u starých záznamů, jen zmizí z formuláře a tabulky. "Přidat pole"
+        založí nové vlastní pole; vlastní pole bez vyplněných dat jde i trvale smazat.
       </p>
       <form @submit.prevent="submitField" style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:14px">
         <div class="field" style="margin:0;flex:1;min-width:160px">
@@ -1113,14 +1039,14 @@ onMounted(async () => {
         </button>
       </form>
       <p v-if="fieldError" class="error" style="margin-top:-8px">{{ fieldError }}</p>
-      <p v-if="!allFields.length" style="color:var(--muted);margin:0">Zatím nemáš žádná vlastní pole.</p>
-      <table v-else>
+      <table>
         <thead>
-          <tr><th>Název</th><th>Typ</th><th>Povinné</th><th>Stav</th><th></th></tr>
+          <tr><th>Název</th><th>Druh</th><th>Typ</th><th>Povinné</th><th>Stav</th><th></th></tr>
         </thead>
         <tbody>
           <tr v-for="f in allFields" :key="f.id">
             <td>{{ f.label }}</td>
+            <td>{{ f.core ? 'vestavěné' : 'vlastní' }}</td>
             <td>{{ f.field_type === 'number' ? 'číslo' : 'text' }}</td>
             <td>{{ f.required ? 'ano' : 'ne' }}</td>
             <td>
@@ -1128,9 +1054,18 @@ onMounted(async () => {
                 {{ f.active ? 'aktivní' : 'neaktivní' }}
               </span>
             </td>
-            <td>
+            <td style="white-space:nowrap">
               <button class="btn secondary" @click="toggleFieldActive(f)">
                 {{ f.active ? 'Deaktivovat' : 'Aktivovat' }}
+              </button>
+              <button
+                v-if="!f.core"
+                class="btn secondary"
+                style="margin-left:6px;color:var(--red)"
+                :disabled="deletingFieldId === f.id"
+                @click="deleteField(f)"
+              >
+                {{ deletingFieldId === f.id ? 'Mažu…' : 'Smazat' }}
               </button>
             </td>
           </tr>
@@ -1190,16 +1125,6 @@ onMounted(async () => {
             <th>Datum</th>
             <th v-if="isAdmin">Kurýr</th>
             <th>Trasa</th>
-            <th class="num">Počet HD</th>
-            <th class="num">Počet Boxy</th>
-            <th class="num">HD → PSD/BOX</th>
-            <th class="num">Svoz do 50 ks</th>
-            <th class="num">Svoz do 100 ks</th>
-            <th class="num">Svoz nad 100 ks</th>
-            <th class="num">Dobírky</th>
-            <th class="num">Počet balíků</th>
-            <th class="num">Nedoručené</th>
-            <th class="num">Km</th>
             <th v-for="f in activeFields" :key="f.id" class="num">{{ f.label }}</th>
             <th>Potvrzeno</th><th>Poznámka</th><th>Po termínu</th><th></th>
           </tr>
@@ -1210,17 +1135,7 @@ onMounted(async () => {
               <td>{{ e.date }}</td>
               <td v-if="isAdmin">{{ courierName(e.user_id) }}</td>
               <td>{{ routes.find(r => r.id === e.route_id)?.name || e.route_id }}</td>
-              <td class="num">{{ e.pocet_hd ?? '-' }}</td>
-              <td class="num">{{ e.pocet_boxy ?? '-' }}</td>
-              <td class="num">{{ e.hd_psd_box ?? '-' }}</td>
-              <td class="num">{{ e.svoz_do_50 ?? '-' }}</td>
-              <td class="num">{{ e.svoz_do_100 ?? '-' }}</td>
-              <td class="num">{{ e.svoz_nad_100 ?? '-' }}</td>
-              <td class="num">{{ e.dobirky ?? '-' }}</td>
-              <td class="num">{{ e.pocet_baliku ?? '-' }}</td>
-              <td class="num">{{ e.nedorucene ?? '-' }}</td>
-              <td class="num">{{ e.km ?? '-' }}</td>
-              <td v-for="f in activeFields" :key="f.id" class="num">{{ e.extra_fields[f.key] ?? '—' }}</td>
+              <td v-for="f in activeFields" :key="f.id" class="num">{{ entryFieldValue(e, f) }}</td>
               <td>{{ e.confirmed ? '✓' : '—' }}</td>
               <td>{{ e.note }}</td>
               <td>
