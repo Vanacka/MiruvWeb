@@ -84,6 +84,10 @@ class VacationDay(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     # True pokud den zadal rovnou Mirek (bez schvalovacího procesu)
     created_by_admin = Column(Boolean, default=False)
+    # Sdílené id pro dny vzniklé jedním "od-do" požadavkem najednou - admin je pak
+    # může schválit/zamítnout jedním kliknutím jako celek. Jednodenní žádost má
+    # skupinu o jednom řádku (request_group_id = vlastní id).
+    request_group_id = Column(Integer, nullable=True, index=True)
 
     user = relationship("User", back_populates="vacation_days")
 

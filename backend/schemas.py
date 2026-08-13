@@ -81,6 +81,11 @@ class VacationRequestCreate(BaseModel):
     date: date
 
 
+class VacationRangeRequestCreate(BaseModel):
+    start_date: date
+    end_date: date
+
+
 class VacationDayOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -88,13 +93,17 @@ class VacationDayOut(BaseModel):
     date: date
     status: VacationStatus
     created_by_admin: bool
+    request_group_id: int
 
 
 class VacationDayColor(BaseModel):
     date: date
-    color: str  # "green" | "yellow" | "red"
+    color: str  # "green" | "yellow" | "red" | "blue" | "gray"
     approved_users: list[str]
     pending_users: list[str]
+    is_weekend: bool
+    is_holiday: bool
+    holiday_name: Optional[str] = None
 
 
 # ---------- Performance ----------

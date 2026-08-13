@@ -100,8 +100,27 @@ def _ensure_core_performance_fields() -> None:
         db.close()
 
 
+def _ensure_vacation_fields() -> None:
+    inspector = inspect(engine)
+    existing = {c["name"] for c in inspector.get_columns("vacation_days")}
+    with engine.begin() as conn:
+        if "request_group_id" not in existing:
+            conn.execute(text("ALTER TABLE vacation_days ADD COLUMN request_group_id INTEGER"))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_vacation_days_request_group_id "
+            "ON vacation_days(request_group_id)"
+        ))
+        # Staré řádky (založené po jednom, před zavedením skupin) dostanou samy
+        # sebe za group id - skupina o jednom řádku. Po prvním doplnění je sloupec
+        # u nových řádků vždy vyplněný, takže se při dalším startu nic nepřepíše.
+        conn.execute(text(
+            "UPDATE vacation_days SET request_group_id = id WHERE request_group_id IS NULL"
+        ))
+
+
 _ensure_columns()
 _ensure_core_performance_fields()
+_ensure_vacation_fields()
 
 app = FastAPI(title="MiruvWeb API")
 

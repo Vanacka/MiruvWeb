@@ -20,25 +20,29 @@ def _easter_sunday(year: int) -> date_type:
     return date_type(year, month, day)
 
 
-def czech_state_holidays(year: int) -> set[date_type]:
+def czech_state_holidays(year: int) -> dict[date_type, str]:
     """Státní svátky ČR pro daný rok (pevná data + pohyblivé svátky odvozené od Velikonoc)."""
     easter = _easter_sunday(year)
     return {
-        date_type(year, 1, 1),
-        easter - timedelta(days=2),   # Velký pátek
-        easter + timedelta(days=1),   # Velikonoční pondělí
-        date_type(year, 5, 1),
-        date_type(year, 5, 8),
-        date_type(year, 7, 5),
-        date_type(year, 7, 6),
-        date_type(year, 9, 28),
-        date_type(year, 10, 28),
-        date_type(year, 11, 17),
-        date_type(year, 12, 24),
-        date_type(year, 12, 25),
-        date_type(year, 12, 26),
+        date_type(year, 1, 1): "Den obnovy samostatného českého státu",
+        easter - timedelta(days=2): "Velký pátek",
+        easter + timedelta(days=1): "Velikonoční pondělí",
+        date_type(year, 5, 1): "Svátek práce",
+        date_type(year, 5, 8): "Den vítězství",
+        date_type(year, 7, 5): "Den slovanských věrozvěstů Cyrila a Metoděje",
+        date_type(year, 7, 6): "Den upálení mistra Jana Husa",
+        date_type(year, 9, 28): "Den české státnosti",
+        date_type(year, 10, 28): "Den vzniku samostatného československého státu",
+        date_type(year, 11, 17): "Den boje za svobodu a demokracii",
+        date_type(year, 12, 24): "Štědrý den",
+        date_type(year, 12, 25): "1. svátek vánoční",
+        date_type(year, 12, 26): "2. svátek vánoční",
     }
 
 
 def is_czech_state_holiday(day: date_type) -> bool:
     return day in czech_state_holidays(day.year)
+
+
+def czech_state_holiday_name(day: date_type) -> str | None:
+    return czech_state_holidays(day.year).get(day)

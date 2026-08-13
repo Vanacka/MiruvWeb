@@ -12,6 +12,7 @@
   --green: #2f9e44;
   --yellow: #f2b705;
   --red: #d64545;
+  --blue: #2563eb;
   --muted: #6b7280;
 
   --font-ui: 'Inter', system-ui, sans-serif;
@@ -310,6 +311,15 @@ label {
   gap: 6px;
 }
 
+.cal-day-header {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-bottom: 4px;
+}
+
 .cal-day {
   aspect-ratio: 1;
   border-radius: 8px;
@@ -318,13 +328,17 @@ label {
   justify-content: center;
   font-family: var(--font-mono);
   font-size: 13px;
-  cursor: pointer;
+  cursor: default;
   border: 1px solid transparent;
 }
 .cal-day.green { background: #e3f6e5; color: var(--green); }
 .cal-day.yellow { background: #fff6db; color: #a1780a; }
 .cal-day.red { background: #fdeeee; color: var(--red); }
-.cal-day:hover { border-color: currentColor; }
+.cal-day.blue { background: #e3ecfc; color: var(--blue); }
+.cal-day.gray { background: #eceef1; color: var(--muted); }
+.cal-day.mine { cursor: pointer; }
+.cal-day.mine:hover { border-color: currentColor; }
+.cal-day.mine-pending { border-color: var(--slate); border-style: dashed; font-weight: 700; }
 
 .error { color: var(--red); font-size: 13px; margin-top: 8px; }
 
